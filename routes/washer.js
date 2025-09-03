@@ -7,9 +7,14 @@ const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 
 // Get list of all washers with their summary
+// Query parameter: forAssignment=true to get only active washers for assignment dropdowns
 router.get('/list', async (req, res) => {
   try {
-    const washers = await User.find({ role: 'washer', status: 'Active' })
+    // Check if request is for assignment purposes (only active washers)
+    const forAssignment = req.query.forAssignment === 'true';
+    const statusFilter = forAssignment ? { status: 'Active' } : {};
+    
+    const washers = await User.find({ role: 'washer', ...statusFilter })
       .select()
       .sort({ name: 1 });
 
@@ -67,37 +72,7 @@ router.get('/list', async (req, res) => {
   }
 });
 
-//get by id
-router.get('/:id', async (req, res) => {
-  try {
-    const washer = await User.findById(req.params.id)
-      .select('id name email phone status');
-
-    if (!washer) {
-      return res.status(404).json({ message: 'Washer not found' });
-    }
-
-    // Get today's leads for the washer
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date();
-    endOfDay.setHours(23, 59, 59, 999);
-
-    const leads = await Lead.find({
-      'assignedWasher._id': washer._id,
-      createdAt: { $gte: startOfDay, $lte: endOfDay }
-    }).select('id customerName status');
-
-    res.json({
-      ...washer.toObject(),
-      todayLeads: leads
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Create new washer
+// Create new washer (MOVED BEFORE PARAMETERIZED ROUTES)
 router.post('/create', async (req, res) => {
   try {
     const { name, email, phone, password } = req.body;
@@ -135,32 +110,7 @@ router.post('/create', async (req, res) => {
   }
 });
 
-// Get washer's assigned leads for a specific date
-router.get('/assigned-washes', async (req, res) => {
-  try {
-    const { date, washerId } = req.query;
-    
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-    
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    const assignedLeads = await Lead.find({
-      'assignedWasher._id': washerId,
-      createdAt: {
-        $gte: startOfDay,
-        $lte: endOfDay
-      }
-    }).sort({ scheduledTime: 1 });
-
-    res.json(assignedLeads);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Mark attendance for a washer
+// Mark attendance for a washer (MOVED BEFORE PARAMETERIZED ROUTES)
 router.post('/attendance', async (req, res) => {
   try {
     const { washerId, type } = req.body; // type can be 'in' or 'out'
@@ -225,76 +175,7 @@ router.post('/attendance', async (req, res) => {
   }
 });
 
-// Get washer's attendance history
-router.get('/:id/attendance', async (req, res) => {
-  try {
-    const { startDate, endDate } = req.query;
-    const washer = await User.findOne({ id: parseInt(req.params.id) });
-
-    if (!washer) {
-      return res.status(404).json({ message: 'Washer not found' });
-    }
-
-    let attendance = washer.attendance || [];
-
-    // Filter by date range if provided
-    if (startDate && endDate) {
-      const start = new Date(startDate);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
-
-      attendance = attendance.filter(a => {
-        const date = new Date(a.date);
-        return date >= start && date <= end;
-      });
-    }
-
-    // Calculate statistics
-    const stats = {
-      totalDays: attendance.length,
-      presentDays: attendance.filter(a => a.timeIn && a.timeOut).length,
-      incompleteDays: attendance.filter(a => a.timeIn && !a.timeOut).length,
-      totalHours: attendance.reduce((sum, a) => sum + (a.duration || 0), 0)
-    };
-
-    res.json({
-      attendance: attendance.sort((a, b) => new Date(b.date) - new Date(a.date)),
-      stats
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Update wash status
-router.put('/wash/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const { status, remarks,password } = req.body;
-
-    const lead = await Lead.findById(id);
-    if (!lead) {
-      return res.status(404).json({ message: 'Lead not found' });
-    }
-
-    lead.status = status;
-    if (remarks) {
-      lead.notes = remarks;
-    }
-    if (password) {
-      const hashedPassword = await bcrypt.hash(password, 10);
-      lead.password = hashedPassword;
-    }
-    await lead.save();
-    res.json(lead);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Get washer's wash history with detailed stats
+// Get washer's wash history with detailed stats (MOVED BEFORE PARAMETERIZED ROUTES)
 router.get('/wash-history/:washerId', async (req, res) => {
   try {
     const { washerId } = req.params;
@@ -395,6 +276,439 @@ router.get('/wash-history/:washerId', async (req, res) => {
   }
 });
 
+//get by id
+router.get('/:id', async (req, res) => {
+  try {
+    const washer = await User.findById(req.params.id)
+      .select('id name email phone status');
+
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+
+    // Get today's leads for the washer
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date();
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const leads = await Lead.find({
+      'assignedWasher._id': washer._id,
+      createdAt: { $gte: startOfDay, $lte: endOfDay }
+    }).select('id customerName status');
+
+    res.json({
+      ...washer.toObject(),
+      todayLeads: leads
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+
+
+// Get washer dashboard stats
+router.get('/:washerId/dashboard', async (req, res) => {
+  try {
+    const { washerId } = req.params;
+    
+    // Find washer by ID (try both numeric ID and MongoDB ObjectId)
+    let washer;
+    if (!isNaN(washerId)) {
+      washer = await User.findOne({ id: parseInt(washerId) });
+    } else if (washerId.match(/^[0-9a-fA-F]{24}$/)) {
+      washer = await User.findById(washerId);
+    }
+    
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+
+    // Set up date ranges
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const dayAfterTomorrow = new Date(tomorrow);
+    dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 1);
+
+    // Get all leads assigned to this washer
+    const assignedLeads = await Lead.find({
+      assignedWasher: washer._id
+    });
+
+    // Initialize counters and arrays for detailed info
+    let todayCompleted = 0;
+    let todayPending = 0;
+    let tomorrowScheduled = 0;
+    const todayWashes = [];
+    const tomorrowWashes = [];
+
+    assignedLeads.forEach(lead => {
+      // Check wash history entries (this is where most washes are tracked)
+      if (lead.washHistory && lead.washHistory.length > 0) {
+        lead.washHistory.forEach(wash => {
+          if (wash.washer && wash.washer.toString() === washer._id.toString()) {
+            const washDate = new Date(wash.date);
+            washDate.setHours(0, 0, 0, 0);
+            
+            // Today's washes
+            if (washDate.getTime() === today.getTime()) {
+              if (wash.washStatus === 'completed') {
+                todayCompleted++;
+              } else {
+                todayPending++;
+              }
+              todayWashes.push({
+                customerName: lead.customerName,
+                area: lead.area,
+                washType: wash.washType,
+                status: wash.washStatus,
+                amount: wash.amount
+              });
+            }
+            
+            // Tomorrow's washes
+            if (washDate.getTime() === tomorrow.getTime()) {
+              tomorrowScheduled++;
+              tomorrowWashes.push({
+                customerName: lead.customerName,
+                area: lead.area,
+                washType: wash.washType,
+                scheduledTime: wash.date
+              });
+            }
+          }
+        });
+      }
+      
+      // Also check if lead is assigned to washer but no specific wash entry
+      if (lead.assignedWasher && lead.assignedWasher.toString() === washer._id.toString()) {
+        // Check monthly subscription washes
+        if (lead.monthlySubscription && lead.monthlySubscription.scheduledWashes) {
+          lead.monthlySubscription.scheduledWashes.forEach(scheduledWash => {
+            const washDate = new Date(scheduledWash.scheduledDate);
+            washDate.setHours(0, 0, 0, 0);
+            
+            // Today's washes
+            if (washDate.getTime() === today.getTime()) {
+              if (scheduledWash.status === 'completed') {
+                todayCompleted++;
+              } else {
+                todayPending++;
+              }
+            }
+            
+            // Tomorrow's washes
+            if (washDate.getTime() === tomorrow.getTime()) {
+              tomorrowScheduled++;
+            }
+          });
+        }
+        
+        // Check one-time wash assignments
+        if (lead.oneTimeWash && lead.oneTimeWash.scheduledDate) {
+          const washDate = new Date(lead.oneTimeWash.scheduledDate);
+          washDate.setHours(0, 0, 0, 0);
+          
+          if (washDate.getTime() === today.getTime()) {
+            if (lead.oneTimeWash.status === 'completed') {
+              todayCompleted++;
+            } else {
+              todayPending++;
+            }
+          }
+          
+          if (washDate.getTime() === tomorrow.getTime()) {
+            tomorrowScheduled++;
+          }
+        }
+      }
+    });
+
+    res.json({
+      washerInfo: {
+        id: washer.id,
+        name: washer.name,
+        email: washer.email,
+        phone: washer.phone
+      },
+      stats: {
+        todayCompleted,
+        todayPending,
+        tomorrowScheduled,
+        todayDate: today.toLocaleDateString('en-GB'),
+        tomorrowDate: tomorrow.toLocaleDateString('en-GB'),
+        todayWashes,
+        tomorrowWashes
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching washer dashboard:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Debug endpoint to check wash entries
+router.get('/:washerId/debug-washes', async (req, res) => {
+  try {
+    const { washerId } = req.params;
+    
+    let washer;
+    if (!isNaN(washerId)) {
+      washer = await User.findOne({ id: parseInt(washerId) });
+    } else if (washerId.match(/^[0-9a-fA-F]{24}$/)) {
+      washer = await User.findById(washerId);
+    }
+    
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+
+    // Set current date as August 12, 2025
+    const today = new Date(2025, 7, 12);
+    const todayStr = today.toISOString().split('T')[0];
+    
+    // Find all leads with wash history for this washer
+    const leadsWithTodayWashes = await Lead.find({
+      'washHistory': {
+        $elemMatch: {
+          washer: washer._id
+        }
+      }
+    }).select('id customerName washHistory assignedWasher');
+    
+    const debugInfo = {
+      washerId: washer.id,
+      washerName: washer.name,
+      washerObjectId: washer._id,
+      todayDate: todayStr,
+      leadsFound: leadsWithTodayWashes.length,
+      leads: leadsWithTodayWashes.map(lead => ({
+        id: lead.id,
+        customerName: lead.customerName,
+        assignedWasher: lead.assignedWasher,
+        washHistory: lead.washHistory.filter(w => w.washer && w.washer.toString() === washer._id.toString()).map(w => ({
+          date: w.date,
+          dateStr: new Date(w.date).toISOString().split('T')[0],
+          washer: w.washer,
+          washType: w.washType,
+          isToday: new Date(w.date).toISOString().split('T')[0] === todayStr
+        }))
+      }))
+    };
+    
+    res.json(debugInfo);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get washer's assigned leads (both one-time and monthly)
+router.get('/:washerId/assigned-leads', async (req, res) => {
+  try {
+    const { washerId } = req.params;
+    
+    let washer;
+    if (!isNaN(washerId)) {
+      washer = await User.findOne({ id: parseInt(washerId) });
+    } else if (washerId.match(/^[0-9a-fA-F]{24}$/)) {
+      washer = await User.findById(washerId);
+    }
+    
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+
+    // Find all leads with wash history assigned to this washer
+    const assignedLeads = await Lead.find({
+      $or: [
+        { assignedWasher: washer._id },
+        { 'washHistory.washer': washer._id },
+        { 'monthlySubscription.scheduledWashes.washer': washer._id },
+        { 'oneTimeWash.washer': washer._id }
+      ]
+    })
+    .populate('assignedWasher', 'name')
+    .populate('washHistory.washer', 'name')
+    .populate('oneTimeWash.washer', 'name')
+    .sort({ createdAt: -1 });
+
+    const oneTimeLeads = assignedLeads.filter(lead => lead.leadType === 'One-time');
+    const monthlyLeads = assignedLeads.filter(lead => lead.leadType === 'Monthly');
+
+    res.json({
+      allLeads: assignedLeads,
+      oneTimeLeads,
+      monthlyLeads,
+      summary: {
+        total: assignedLeads.length,
+        oneTime: oneTimeLeads.length,
+        monthly: monthlyLeads.length,
+        converted: assignedLeads.filter(lead => lead.status === 'Converted').length
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching assigned leads:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+
+
+// Get washer's attendance history
+router.get('/:id/attendance', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const washer = await User.findOne({ id: parseInt(req.params.id) });
+
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+
+    let attendance = washer.attendance || [];
+
+    // Filter by date range if provided
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+
+      attendance = attendance.filter(a => {
+        const date = new Date(a.date);
+        return date >= start && date <= end;
+      });
+    }
+
+    // Calculate statistics
+    const stats = {
+      totalDays: attendance.length,
+      presentDays: attendance.filter(a => a.timeIn && a.timeOut).length,
+      incompleteDays: attendance.filter(a => a.timeIn && !a.timeOut).length,
+      totalHours: attendance.reduce((sum, a) => sum + (a.duration || 0), 0)
+    };
+
+    res.json({
+      attendance: attendance.sort((a, b) => new Date(b.date) - new Date(a.date)),
+      stats
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Update wash status by washer (handles both one-time and monthly leads)
+router.put('/:washerId/update-wash/:leadId', async (req, res) => {
+  try {
+    const { washerId, leadId } = req.params;
+    const { washStatus, amountPaid, feedback } = req.body;
+
+    // Find washer
+    const washer = await User.findOne({ id: parseInt(washerId) });
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+
+    // Find lead
+    const lead = await Lead.findOne({ id: parseInt(leadId) });
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    // Check if washer is assigned to this lead
+    if (!lead.assignedWasher || lead.assignedWasher.toString() !== washer._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized to update this lead' });
+    }
+
+    // Washers can only update existing wash entries, not create new ones
+    if (lead.washHistory.length === 0) {
+      return res.status(400).json({ message: 'No wash entry found to update. Admin must create wash entry first.' });
+    }
+
+    // Update the latest wash entry (only status, payment, and feedback)
+    const latestWash = lead.washHistory[lead.washHistory.length - 1];
+    latestWash.washStatus = washStatus;
+    latestWash.is_amountPaid = amountPaid;
+    latestWash.feedback = feedback;
+    
+    if (washStatus === 'completed') {
+      lead.status = 'Converted';
+    }
+    
+    await lead.save();
+
+    // Customer creation logic based on lead type
+    const Customer = require('../models/Customer');
+    if (lead.leadType === 'Monthly') {
+      // For Monthly leads, create customer immediately after first wash
+      await createOrUpdateCustomer(lead, 'Monthly');
+    } else if (lead.leadType === 'One-time' && lead.washHistory.length >= 2) {
+      // For One-time leads, create customer only after 2nd wash
+      await createOrUpdateCustomer(lead, 'One-time');
+    }
+
+    const updatedLead = await Lead.findById(lead._id)
+      .populate('assignedWasher', 'name')
+      .populate('washHistory.washer', 'name');
+
+    res.json(updatedLead);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Helper function to create or update customer
+async function createOrUpdateCustomer(lead, customerType) {
+  const Customer = require('../models/Customer');
+  
+  try {
+    let customer = await Customer.findOne({ phone: lead.phone });
+    
+    if (!customer) {
+      // Determine plan based on lead type and subscription
+      let plan = 'One-time';
+      let planDetails = {};
+      
+      if (lead.leadType === 'Monthly' && lead.monthlySubscription) {
+        plan = lead.monthlySubscription.packageType;
+        planDetails = {
+          startDate: lead.monthlySubscription.startDate,
+          washesUsed: lead.monthlySubscription.completedWashes,
+          totalWashes: lead.monthlySubscription.totalWashes
+        };
+      }
+      
+      // Create new customer
+      customer = new Customer({
+        name: lead.customerName,
+        phone: lead.phone,
+        area: lead.area,
+        carModel: lead.carModel,
+        customerType: lead.leadType,
+        plan: plan,
+        planDetails: planDetails,
+        location: lead.location,
+        status: 'Active'
+      });
+      await customer.save();
+      console.log(`Customer created for ${lead.leadType} lead: ${lead.customerName}`);
+    } else {
+      // Update existing customer
+      if (lead.leadType === 'Monthly' && lead.monthlySubscription) {
+        customer.planDetails.washesUsed = lead.monthlySubscription.completedWashes;
+      }
+      await customer.save();
+      console.log(`Customer updated for ${lead.leadType} lead: ${lead.customerName}`);
+    }
+  } catch (error) {
+    console.error('Error creating/updating customer:', error);
+  }
+}
+
+
+
 // Update washer status
 router.post('/:id/status', async (req, res) => {
   try {
@@ -442,11 +756,14 @@ router.get('/:id/wash-details', async (req, res) => {
     leads.forEach(lead => {
       if (lead.washHistory && lead.washHistory.length > 0) {
         lead.washHistory.forEach(wash => {
-          if (wash.washer.equals(washer._id)) {
+          if (wash.washer && wash.washer.toString() === washer._id.toString()) {
             totalWashes++;
             if (wash.washStatus === 'completed') {
               totalCompletedWashes++;
-              totalEarnings += wash.amount || 0;
+              // Only count earnings from completed AND paid washes
+              if (wash.is_amountPaid === true) {
+                totalEarnings += wash.amount || 0;
+              }
             }
 
             // Add to all washes array
@@ -500,7 +817,7 @@ router.put('/:id/personal-details', upload.fields([
   { name: 'drivingLicenseImage', maxCount: 1 }
 ]), async (req, res) => {
   try {
-    const { address, dateOfBirth, aadharNumber, email, phone, password, keepExistingPassword } = req.body;
+    const { address, dateOfBirth, email, phone, password, keepExistingPassword } = req.body;
     console.log("Request body:", req.body);
     console.log("Password received:", password);
     console.log("keepExistingPassword:", keepExistingPassword);
@@ -512,7 +829,6 @@ router.put('/:id/personal-details', upload.fields([
 
     washer.address = address;
     washer.dateOfBirth = new Date(dateOfBirth);
-    washer.aadharNumber = aadharNumber;
     washer.email = email;
     washer.phone = phone;
     

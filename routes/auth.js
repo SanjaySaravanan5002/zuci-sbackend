@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
 const User = mongoose.model('User');
 const bcrypt = require('bcryptjs');
+const { auth } = require('../middleware/auth');
 
 /**
  * @route   POST /api/auth/login
@@ -30,14 +32,19 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
-    // User matched, create token (in a real app, use JWT)
-    const token = `mock_jwt_token_${user.role}_${Date.now()}`;
+    // User matched, create JWT token
+    const payload = {
+      userId: user._id,
+      role: user.role
+    };
+    
+    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '2d' });
 
     // Return user info without password and with token
     res.json({
       token,
       user: {
-        id: user._id,
+        id: user.id, // Use numeric id instead of MongoDB _id
         name: user.name,
         email: user.email,
         role: user.role
@@ -54,42 +61,64 @@ router.post('/login', async (req, res) => {
  * @desc    Get current user
  * @access  Private
  */
-router.get('/me', async (req, res) => {
+router.get('/me', auth, async (req, res) => {
   try {
-    // In a real app, this would verify the JWT token
-    // and return the user based on the token payload
+    // User is already attached to req by auth middleware
+    const user = req.user;
     
-    // Mock implementation - extract user info from Authorization header
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ message: 'No token, authorization denied' });
-    }
-
-    const token = authHeader.split(' ')[1];
-    const tokenParts = token.split('_');
-    
-    if (tokenParts.length < 3 || tokenParts[0] !== 'mock' || tokenParts[1] !== 'jwt') {
-      return res.status(401).json({ message: 'Invalid token' });
-    }
-
-    const role = tokenParts[2];
-    
-    // Find first user with matching role (simplified for demo)
-    const user = await User.findOne({ role });
-    
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
     // Return user without password
     res.json({
-      id: user._id,
+      id: user.id,
       name: user.name,
       email: user.email,
       role: user.role
     });
   } catch (error) {
     console.error('Get user error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/**
+ * @route   POST /api/auth/register
+ * @desc    Register new user
+ * @access  Public
+ */
+router.post('/register', async (req, res) => {
+  try {
+    const { name, email, phone, password, role } = req.body;
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'User already exists' });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
+    const user = new User({
+      name,
+      email,
+      phone,
+      password: hashedPassword,
+      role
+    });
+
+    await user.save();
+
+    res.status(201).json({
+      message: 'User created successfully',
+      user: {
+        id: user.id, // Use numeric id instead of MongoDB _id
+        name: user.name,
+        email: user.email,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    console.error('Register error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });

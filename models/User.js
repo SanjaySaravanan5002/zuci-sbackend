@@ -60,7 +60,7 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['admin', 'washer'],
+    enum: ['superadmin', 'admin', 'limited_admin', 'washer'],
     required: true
   },
   password: {
@@ -101,7 +101,8 @@ userSchema.pre('save', async function(next) {
   }
 });
 
-userSchema.index({ phone: 1 });
-userSchema.index({ id: 1 }, { unique: true });
+// Indexes are already defined in the schema fields above
+// userSchema.index({ phone: 1 }); // Removed duplicate - already defined with unique: true in schema
+// userSchema.index({ id: 1 }, { unique: true }); // Removed duplicate - already defined with unique: true in schema
 
 module.exports = mongoose.model('User', userSchema);

@@ -1,16 +1,98 @@
 const mongoose = require('mongoose');
 const Counter = require('./Counter');
 
+const scheduledWashSchema = new mongoose.Schema({
+  washNumber: {
+    type: Number,
+    required: true
+  },
+  scheduledDate: {
+    type: Date,
+    required: true
+  },
+  scheduledTime: {
+    type: String,
+    default: '10:00'
+  },
+  status: {
+    type: String,
+    enum: ['scheduled', 'completed', 'missed'],
+    default: 'scheduled'
+  },
+  completedDate: Date,
+  washer: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  feedback: String,
+  amount: Number,
+  is_amountPaid: {
+    type: Boolean,
+    default: false
+  },
+  washServiceType: {
+    type: String,
+    enum: ['Interior', 'Exterior'],
+    default: 'Exterior'
+  },
+  duration: {
+    type: Number // in minutes
+  }
+}, { timestamps: true });
+
+const monthlySubscriptionSchema = new mongoose.Schema({
+  packageType: {
+    type: String,
+    required: true
+  },
+  customPlanName: {
+    type: String,
+    default: ''
+  },
+  totalWashes: {
+    type: Number,
+    required: true
+  },
+  totalInteriorWashes: {
+    type: Number,
+    default: 0
+  },
+  usedInteriorWashes: {
+    type: Number,
+    default: 0
+  },
+  completedWashes: {
+    type: Number,
+    default: 0
+  },
+  monthlyPrice: {
+    type: Number,
+    required: true
+  },
+  startDate: {
+    type: Date,
+    required: true
+  },
+  endDate: {
+    type: Date,
+    required: true
+  },
+  scheduledWashes: [scheduledWashSchema],
+  isActive: {
+    type: Boolean,
+    default: true
+  }
+}, { timestamps: true });
+
 const washHistorySchema = new mongoose.Schema({
   washType: {
     type: String,
-    required: true,
-    enum: ['Basic', 'Premium', 'Deluxe']
+    required: true
   },
   washer: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: false
   },
   amount: {
     type: Number,
@@ -31,8 +113,22 @@ const washHistorySchema = new mongoose.Schema({
   },
   washStatus: {
     type: String,
-    enum: ['completed', 'notcompleted'],
-    default: 'completed'
+    enum: ['pending', 'completed', 'notcompleted', 'in-progress'],
+    default: 'pending'
+  },
+  washServiceType: {
+    type: String,
+    enum: ['Interior', 'Exterior'],
+    default: 'Exterior'
+  },
+  startTime: {
+    type: Date
+  },
+  endTime: {
+    type: Date
+  },
+  duration: {
+    type: Number // in minutes
   }
 }, { timestamps: true });
 
@@ -47,7 +143,7 @@ const leadSchema = new mongoose.Schema({
   },
   leadSource: {
     type: String,
-    enum: ['Pamphlet', 'WhatsApp', 'Referral', 'Walk-in', 'Other','Social Media'],
+    enum: ['Pamphlet', 'WhatsApp', 'Referral', 'Walk-in', 'Other','Social Media', 'Website'],
     required: true
   },
   customerName: {
@@ -56,19 +152,49 @@ const leadSchema = new mongoose.Schema({
   },
   phone: {
     type: String,
-    required: true,
-    index: true
+    required: true
   },
   area: {
     type: String,
     required: true
   },
   carModel: String,
+  vehicleNumber: String,
   notes: String,
   washHistory: [washHistorySchema],
+  monthlySubscription: monthlySubscriptionSchema,
   assignedWasher: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
+  },
+  oneTimeWash: {
+    washType: {
+      type: String,
+      enum: ['Basic', 'Premium', 'Deluxe']
+    },
+    amount: Number,
+    scheduledDate: Date,
+    washer: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    status: {
+      type: String,
+      enum: ['pending', 'completed', 'cancelled'],
+      default: 'pending'
+    },
+    assignedAt: {
+      type: Date,
+      default: Date.now
+    },
+    washServiceType: {
+      type: String,
+      enum: ['Interior', 'Exterior'],
+      default: 'Exterior'
+    },
+    duration: {
+      type: Number // in minutes
+    }
   },
   location: {
     type: {

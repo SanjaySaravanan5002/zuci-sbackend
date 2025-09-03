@@ -1,37 +1,31 @@
 const mongoose = require('mongoose');
 
 const expenseSchema = new mongoose.Schema({
-  category: {
+  washerName: {
     type: String,
-    enum: ['Salary', 'Supplies', 'Equipment', 'Marketing', 'Utilities', 'Other'],
-    required: true
+    required: true,
+    trim: true
   },
   amount: {
     type: Number,
-    required: true
+    required: true,
+    min: 0
   },
-  description: {
+  reason: {
     type: String,
-    required: true
+    required: true,
+    trim: true
   },
   date: {
     type: Date,
-    required: true
-  },
-  paidTo: String,
-  receipt: String, // URL to receipt image
-  addedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  createdAt: {
-    type: Date,
     default: Date.now
+  },
+  createdBy: {
+    type: String,
+    default: 'Admin'
   }
+}, {
+  timestamps: true
 });
-
-expenseSchema.index({ date: -1 });
-expenseSchema.index({ category: 1 });
 
 module.exports = mongoose.model('Expense', expenseSchema);
