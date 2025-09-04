@@ -167,7 +167,7 @@ router.get('/upcoming-washes', auth, authorize('admin', 'superadmin'), async (re
     const { date = 'today', type, source, search } = req.query;
     
     // Calculate date range - use current date
-    const today = new Date(); // Use actual current date
+    const today = new Date();
     today.setHours(0, 0, 0, 0);
     
     let startDate, endDate;
@@ -185,141 +185,123 @@ router.get('/upcoming-washes', auth, authorize('admin', 'superadmin'), async (re
         endDate = new Date(today.getTime() + 24 * 60 * 60 * 1000);
     }
     
-    // Find all leads and filter in code for better control
-    const allLeads = await Lead.find({ assignedWasher: { $exists: true, $ne: null } })
+    // Find all leads with proper population - FIXED: Remove assignedWasher filter
+    const allLeads = await Lead.find({})
       .populate('assignedWasher', 'name')
       .populate('washHistory.washer', 'name')
+      .populate('monthlySubscription.scheduledWashes.washer', 'name')
+      .populate('oneTimeWash.washer', 'name')
       .sort({ createdAt: -1 });
     
-    // Filter leads that have upcoming washes in the date range
-    const leads = allLeads.filter(lead => {
-      // Check monthly subscription scheduled washes
+    const upcomingWashes = [];
+    
+    allLeads.forEach(lead => {
+      let hasUpcomingWash = false;
+      let upcomingWashDetails = null;
+      
+      // Check monthly subscription scheduled washes FIRST - FIXED
       if (lead.leadType === 'Monthly' && lead.monthlySubscription?.scheduledWashes) {
-        const hasUpcoming = lead.monthlySubscription.scheduledWashes.some(w => {
+        const upcomingMonthlyWash = lead.monthlySubscription.scheduledWashes.find(w => {
           const washDate = new Date(w.scheduledDate);
-          return washDate >= startDate && washDate < endDate && ['scheduled', 'pending'].includes(w.status);
+          return washDate >= startDate && washDate < endDate && 
+                 ['scheduled', 'pending'].includes(w.status);
         });
-        if (hasUpcoming) return true;
-      }
-      
-      // Check one-time wash
-      if (lead.leadType === 'One-time' && lead.oneTimeWash?.scheduledDate) {
-        const washDate = new Date(lead.oneTimeWash.scheduledDate);
-        if (washDate >= startDate && washDate < endDate && ['scheduled', 'pending'].includes(lead.oneTimeWash.status)) {
-          return true;
-        }
-      }
-      
-      // Check wash history for pending washes
-      if (lead.washHistory?.length > 0) {
-        const hasPending = lead.washHistory.some(w => {
-          const washDate = new Date(w.date);
-          return washDate >= startDate && washDate < endDate && ['scheduled', 'pending'].includes(w.washStatus);
-        });
-        if (hasPending) return true;
-      }
-      
-      return false;
-    });
-    
-    // Apply additional filters
-    let filteredLeads = leads;
-    if (type) filteredLeads = filteredLeads.filter(lead => lead.leadType === type);
-    if (source) filteredLeads = filteredLeads.filter(lead => lead.leadSource === source);
-    if (search) {
-      filteredLeads = filteredLeads.filter(lead => 
-        lead.customerName.toLowerCase().includes(search.toLowerCase()) ||
-        lead.phone.includes(search) ||
-        lead.area.toLowerCase().includes(search.toLowerCase())
-      );
-    }
-    
-    // Transform data for frontend
-    const upcomingWashes = filteredLeads.map(lead => {
-      let lastWash = null;
-      if (lead.washHistory && lead.washHistory.length > 0) {
-        const completedWashes = lead.washHistory
-          .filter(w => w.washStatus === 'completed')
-          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
         
-        if (completedWashes.length > 0) {
-          const wash = completedWashes[0];
-          lastWash = {
-            date: wash.date,
-            washer: wash.washer?.name || 'Unknown',
-            washType: wash.washServiceType || wash.washType
+        if (upcomingMonthlyWash) {
+          hasUpcomingWash = true;
+          upcomingWashDetails = {
+            date: upcomingMonthlyWash.scheduledDate,
+            washType: lead.monthlySubscription.packageType || lead.monthlySubscription.customPlanName,
+            washer: upcomingMonthlyWash.washer?.name || lead.assignedWasher?.name,
+            status: upcomingMonthlyWash.status
           };
         }
       }
       
-      // Find upcoming wash from multiple sources
-      let upcomingWash = null;
-      
-      // Check monthly subscription scheduled washes
-      if (lead.leadType === 'Monthly' && lead.monthlySubscription) {
-        const upcoming = lead.monthlySubscription.scheduledWashes.find(w => {
-          const washDate = new Date(w.scheduledDate);
-          return washDate >= startDate && washDate < endDate && ['scheduled', 'pending'].includes(w.status);
-        });
-        if (upcoming) {
-          upcomingWash = {
-            date: upcoming.scheduledDate,
-            washType: lead.monthlySubscription.packageType,
-            washer: lead.assignedWasher?.name
-          };
-        }
-      }
-      
-      // Check one-time wash
-      if (!upcomingWash && lead.oneTimeWash) {
+      // Check one-time wash if no monthly wash found
+      if (!hasUpcomingWash && lead.leadType === 'One-time' && lead.oneTimeWash?.scheduledDate) {
         const washDate = new Date(lead.oneTimeWash.scheduledDate);
-        if (washDate >= startDate && washDate < endDate && ['scheduled', 'pending'].includes(lead.oneTimeWash.status)) {
-          upcomingWash = {
+        if (washDate >= startDate && washDate < endDate && 
+            ['scheduled', 'pending'].includes(lead.oneTimeWash.status)) {
+          hasUpcomingWash = true;
+          upcomingWashDetails = {
             date: lead.oneTimeWash.scheduledDate,
             washType: lead.oneTimeWash.washType,
-            washer: lead.assignedWasher?.name
+            washer: lead.oneTimeWash.washer?.name || lead.assignedWasher?.name,
+            status: lead.oneTimeWash.status
           };
         }
       }
       
-      // Check wash history for pending washes
-      if (!upcomingWash && lead.washHistory) {
+      // Check wash history for pending washes if no specific wash found
+      if (!hasUpcomingWash && lead.washHistory?.length > 0) {
         const pendingWash = lead.washHistory.find(w => {
-          let washDate;
-          if (typeof w.date === 'string' && w.date.includes('/')) {
-            washDate = new Date(w.date);
-          } else {
-            washDate = new Date(w.date);
-          }
-          return washDate >= startDate && washDate < endDate && ['scheduled', 'pending'].includes(w.washStatus);
+          const washDate = new Date(w.date);
+          return washDate >= startDate && washDate < endDate && 
+                 ['scheduled', 'pending'].includes(w.washStatus);
         });
+        
         if (pendingWash) {
-          upcomingWash = {
+          hasUpcomingWash = true;
+          upcomingWashDetails = {
             date: pendingWash.date,
             washType: pendingWash.washType,
-            washer: pendingWash.washer?.name || lead.assignedWasher?.name
+            washer: pendingWash.washer?.name || lead.assignedWasher?.name,
+            status: pendingWash.washStatus
           };
         }
       }
-      
-      return {
-        id: lead.id,
-        customerName: lead.customerName,
-        phone: lead.phone,
-        area: lead.area,
-        carModel: lead.carModel,
-        leadType: lead.leadType,
-        leadSource: lead.leadSource,
-        status: lead.status,
-        createdAt: lead.createdAt,
-        lastWash,
-        upcomingWash
-      };
-    }).filter(lead => lead.upcomingWash); // Only include leads with upcoming washes
+    
+      // Only include leads with upcoming washes and apply filters
+      if (hasUpcomingWash && upcomingWashDetails) {
+        // Apply filters
+        if (type && lead.leadType !== type) return;
+        if (source && lead.leadSource !== source) return;
+        if (search) {
+          const searchLower = search.toLowerCase();
+          if (!lead.customerName.toLowerCase().includes(searchLower) &&
+              !lead.phone.includes(search) &&
+              !lead.area.toLowerCase().includes(searchLower)) {
+            return;
+          }
+        }
+        
+        // Get last completed wash
+        let lastWash = null;
+        if (lead.washHistory && lead.washHistory.length > 0) {
+          const completedWashes = lead.washHistory
+            .filter(w => w.washStatus === 'completed')
+            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          
+          if (completedWashes.length > 0) {
+            const wash = completedWashes[0];
+            lastWash = {
+              date: wash.date,
+              washer: wash.washer?.name || 'Unknown',
+              washType: wash.washServiceType || wash.washType
+            };
+          }
+        }
+        
+        upcomingWashes.push({
+          id: lead.id,
+          customerName: lead.customerName,
+          phone: lead.phone,
+          area: lead.area,
+          carModel: lead.carModel,
+          leadType: lead.leadType,
+          leadSource: lead.leadSource,
+          status: lead.status,
+          createdAt: lead.createdAt,
+          lastWash,
+          upcomingWash: upcomingWashDetails
+        });
+      }
+    });
     
     console.log(`Date filter: ${date}, Start: ${startDate}, End: ${endDate}`);
-    console.log(`Filtered leads count: ${filteredLeads.length}`);
-    console.log('Leads with today washes:', filteredLeads.map(l => l.customerName));
+    console.log(`Total upcoming washes found: ${upcomingWashes.length}`);
+    console.log('Monthly customers:', upcomingWashes.filter(w => w.leadType === 'Monthly').map(w => w.customerName));
     
     res.json(upcomingWashes);
   } catch (error) {

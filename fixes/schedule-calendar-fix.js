@@ -1,9 +1,7 @@
-const express = require('express');
-const router = express.Router();
-const Lead = require('../models/Lead');
-const { auth, authorize } = require('../middleware/auth');
+// Fixed version of the scheduled-washes endpoint
+// Replace the existing endpoint in routes/scheduleWash.js
 
-// Get scheduled washes for calendar view
+// Get scheduled washes for calendar view - FIXED VERSION
 router.get('/scheduled-washes', auth, async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
@@ -15,7 +13,7 @@ router.get('/scheduled-washes', auth, async (req, res) => {
     const start = new Date(startDate);
     const end = new Date(endDate);
 
-    // Find all leads (both assigned and unassigned)
+    // Find all leads with proper population
     const leads = await Lead.find({})
       .populate('assignedWasher', 'name')
       .populate('washHistory.washer', 'name')
@@ -25,38 +23,7 @@ router.get('/scheduled-washes', auth, async (req, res) => {
     const scheduledWashes = [];
 
     leads.forEach(lead => {
-      // One-time wash - use scheduled date or today if just created/assigned
-      if (lead.oneTimeWash) {
-        let washDate;
-        if (lead.oneTimeWash.scheduledDate) {
-          washDate = new Date(lead.oneTimeWash.scheduledDate);
-        } else {
-          // If no scheduled date, use creation date
-          washDate = new Date(lead.createdAt);
-        }
-        
-        if (washDate >= start && washDate <= end) {
-          const washerInfo = lead.oneTimeWash.washer || lead.assignedWasher;
-          if (washerInfo) {
-            scheduledWashes.push({
-              _id: `onetime_${lead._id}`,
-              customerName: lead.customerName,
-              phone: lead.phone,
-              area: lead.area,
-              carModel: lead.carModel,
-              washType: lead.oneTimeWash.washType || 'One-time',
-              scheduledDate: washDate.toISOString(),
-              washer: washerInfo,
-              leadId: lead._id,
-              leadType: 'One-time',
-              status: lead.oneTimeWash.status === 'completed' ? 'completed' : 'pending',
-              source: 'oneTimeWash'
-            });
-          }
-        }
-      }
-      
-      // Monthly subscription scheduled washes - FIXED: Always show if has washer
+      // Monthly subscription scheduled washes - PRIORITY 1
       if (lead.monthlySubscription && lead.monthlySubscription.scheduledWashes) {
         lead.monthlySubscription.scheduledWashes.forEach((scheduledWash, index) => {
           const washDate = new Date(scheduledWash.scheduledDate);
@@ -83,7 +50,37 @@ router.get('/scheduled-washes', auth, async (req, res) => {
         });
       }
       
-      // Wash history entries - only if not covered by above
+      // One-time wash - PRIORITY 2
+      if (lead.oneTimeWash) {
+        let washDate;
+        if (lead.oneTimeWash.scheduledDate) {
+          washDate = new Date(lead.oneTimeWash.scheduledDate);
+        } else {
+          washDate = new Date(lead.createdAt);
+        }
+        
+        if (washDate >= start && washDate <= end) {
+          const washerInfo = lead.oneTimeWash.washer || lead.assignedWasher;
+          if (washerInfo) {
+            scheduledWashes.push({
+              _id: `onetime_${lead._id}`,
+              customerName: lead.customerName,
+              phone: lead.phone,
+              area: lead.area,
+              carModel: lead.carModel,
+              washType: lead.oneTimeWash.washType || 'One-time',
+              scheduledDate: washDate.toISOString(),
+              washer: washerInfo,
+              leadId: lead._id,
+              leadType: 'One-time',
+              status: lead.oneTimeWash.status === 'completed' ? 'completed' : 'pending',
+              source: 'oneTimeWash'
+            });
+          }
+        }
+      }
+      
+      // Wash history entries - PRIORITY 3 (only if not covered by above)
       if (lead.washHistory && lead.washHistory.length > 0) {
         lead.washHistory.forEach((wash, index) => {
           const washDate = new Date(wash.date);
@@ -116,38 +113,9 @@ router.get('/scheduled-washes', auth, async (req, res) => {
           }
         });
       }
-      
-      // Show leads that have no specific wash dates but are assigned to washers
-      // Only show if no wash history, one-time wash, or monthly subscription exists
-      if (!lead.washHistory?.length && 
-          !lead.oneTimeWash && 
-          !lead.monthlySubscription?.scheduledWashes?.length &&
-          lead.assignedWasher) {
-        
-        const today = new Date();
-        const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-        
-        const createdDate = new Date(lead.createdAt);
-        const createdDateOnly = new Date(createdDate.getFullYear(), createdDate.getMonth(), createdDate.getDate());
-        
-        if (createdDateOnly >= start && createdDateOnly <= end) {
-          scheduledWashes.push({
-            _id: `lead_${lead._id}`,
-            customerName: lead.customerName,
-            phone: lead.phone,
-            area: lead.area,
-            carModel: lead.carModel,
-            washType: lead.leadType || 'Basic',
-            scheduledDate: createdDateOnly.toISOString(),
-            washer: lead.assignedWasher,
-            leadId: lead._id,
-            status: 'pending'
-          });
-        }
-      }
     });
 
-    // Remove duplicates with source priority
+    // Remove duplicates and sort
     const uniqueWashes = [];
     const seenWashes = new Map();
     
@@ -169,16 +137,7 @@ router.get('/scheduled-washes', auth, async (req, res) => {
       }
     });
     
-    uniqueWashes.sort((a, b) => {
-      const dateA = new Date(a.scheduledDate);
-      const dateB = new Date(b.scheduledDate);
-      if (dateA.getTime() === dateB.getTime()) {
-        // If same date, prioritize assigned over pending
-        if (a.status === 'assigned' && b.status === 'pending') return -1;
-        if (a.status === 'pending' && b.status === 'assigned') return 1;
-      }
-      return dateA.getTime() - dateB.getTime();
-    });
+    uniqueWashes.sort((a, b) => new Date(a.scheduledDate) - new Date(b.scheduledDate));
     
     console.log(`Returning ${uniqueWashes.length} scheduled washes`);
     console.log('Monthly customers in calendar:', uniqueWashes.filter(w => w.leadType === 'Monthly').map(w => w.customerName));
@@ -189,5 +148,3 @@ router.get('/scheduled-washes', auth, async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
-
-module.exports = router;
