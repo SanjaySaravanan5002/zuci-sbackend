@@ -620,10 +620,22 @@ router.put('/:id', async (req, res) => {
 // Delete lead
 router.delete('/:id', async (req, res) => {
   try {
-    const lead = await Lead.findByIdAndDelete(req.params.id);
+    let lead;
+    
+    // Try numeric ID first
+    if (!isNaN(req.params.id)) {
+      lead = await Lead.findOneAndDelete({ id: parseInt(req.params.id) });
+    }
+    
+    // If not found by numeric ID and ID looks like ObjectId, try MongoDB ID
+    if (!lead && req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+      lead = await Lead.findByIdAndDelete(req.params.id);
+    }
+    
     if (!lead) {
       return res.status(404).json({ message: 'Lead not found' });
     }
+    
     res.json({ message: 'Lead deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
