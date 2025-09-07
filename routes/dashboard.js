@@ -10,13 +10,53 @@ router.get('/test', (req, res) => {
   res.json({ message: 'Dashboard API is working', timestamp: new Date().toISOString() });
 });
 
+// Add sample attendance data for testing
+router.post('/add-sample-attendance', auth, authorize('superadmin', 'admin'), async (req, res) => {
+  try {
+    const washers = await User.find({ role: 'washer' });
+    
+    for (const washer of washers) {
+      const attendanceData = [];
+      
+      for (let i = 0; i < 7; i++) {
+        const date = new Date();
+        date.setDate(date.getDate() - i);
+        date.setHours(0, 0, 0, 0);
+        
+        const timeIn = new Date(date);
+        timeIn.setHours(9, 0, 0, 0);
+        
+        const timeOut = new Date(date);
+        timeOut.setHours(17, 0, 0, 0);
+        
+        attendanceData.push({
+          date: date,
+          timeIn: timeIn,
+          timeOut: timeOut,
+          duration: 8,
+          status: 'present'
+        });
+      }
+      
+      washer.attendance = attendanceData;
+      await washer.save();
+    }
+    
+    res.json({ 
+      message: 'Sample attendance data added successfully',
+      washersUpdated: washers.length
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Test endpoint to check washers and create sample data
 router.get('/test-washers', async (req, res) => {
   try {
     const washers = await User.find({ role: 'washer' });
     
     if (washers.length === 0) {
-      // Create sample washer if none exist
       const sampleWasher = new User({
         name: 'Sample Washer',
         phone: '9999999999',
