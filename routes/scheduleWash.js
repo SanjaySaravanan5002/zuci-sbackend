@@ -190,4 +190,61 @@ router.get('/scheduled-washes', auth, async (req, res) => {
   }
 });
 
+// Update wash details (reschedule date, change washer, etc.)
+router.put('/update-wash/:washId', auth, async (req, res) => {
+  console.log('Update wash route hit:', req.params.washId, req.body);
+  try {
+    const { washId } = req.params;
+    const { scheduledDate, washType, washer } = req.body;
+    
+    // Parse washId to determine source and lead
+    const [source, leadId, index] = washId.split('_');
+    
+    const lead = await Lead.findById(leadId).populate('assignedWasher', 'name');
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+    
+    // Find washer by name if provided
+    let washerObj = null;
+    if (washer) {
+      const User = require('../models/User');
+      washerObj = await User.findOne({ name: washer, role: 'washer' });
+    }
+    
+    // Update based on source
+    if (source === 'onetime' && lead.oneTimeWash) {
+      if (scheduledDate) lead.oneTimeWash.scheduledDate = new Date(scheduledDate);
+      if (washType) lead.oneTimeWash.washType = washType;
+      if (washerObj) lead.oneTimeWash.washer = washerObj._id;
+    } else if (source === 'monthly' && lead.monthlySubscription?.scheduledWashes) {
+      const washIndex = parseInt(index);
+      if (lead.monthlySubscription.scheduledWashes[washIndex]) {
+        if (scheduledDate) lead.monthlySubscription.scheduledWashes[washIndex].scheduledDate = new Date(scheduledDate);
+        if (washerObj) lead.monthlySubscription.scheduledWashes[washIndex].washer = washerObj._id;
+      }
+      if (washType) lead.monthlySubscription.packageType = washType;
+    } else if (source === 'history' && lead.washHistory) {
+      const washIndex = parseInt(index);
+      if (lead.washHistory[washIndex]) {
+        if (scheduledDate) lead.washHistory[washIndex].date = new Date(scheduledDate);
+        if (washType) lead.washHistory[washIndex].washType = washType;
+        if (washerObj) lead.washHistory[washIndex].washer = washerObj._id;
+      }
+    }
+    
+    // Update assigned washer if provided
+    if (washerObj) {
+      lead.assignedWasher = washerObj._id;
+    }
+    
+    await lead.save();
+    
+    res.json({ message: 'Wash updated successfully', lead });
+  } catch (error) {
+    console.error('Error updating wash:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 module.exports = router;
