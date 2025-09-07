@@ -834,10 +834,7 @@ router.put('/:id/onetime-wash/update', async (req, res) => {
       
       lead.status = 'Converted';
       
-      // Create customer if needed
-      if (lead.leadType === 'One-time' && lead.washHistory.length >= 2) {
-        await createOrUpdateCustomer(lead);
-      }
+
     }
 
     await lead.save();
@@ -921,15 +918,7 @@ router.put('/:id/assign', async (req, res) => {
     console.log("lead", lead);
     await lead.save();
 
-    // Customer creation logic
-    const Customer = require('../models/Customer');
-    if (lead.leadType === 'Monthly') {
-      // For Monthly leads, create customer immediately after first wash
-      await createOrUpdateCustomer(lead);
-    } else if (lead.leadType === 'One-time' && lead.washHistory.length >= 2) {
-      // For One-time leads, create customer only after 2nd wash
-      await createOrUpdateCustomer(lead);
-    }
+
 
     const updatedLead = await Lead.findById(lead._id)
       .populate('assignedWasher', 'name')
@@ -1055,38 +1044,7 @@ router.post('/:id/wash-history', async (req, res) => {
   }
 });
 
-// Helper function to create or update customer
-async function createOrUpdateCustomer(lead) {
-  const Customer = require('../models/Customer');
-  
-  try {
-    let customer = await Customer.findOne({ phone: lead.phone });
-    
-    if (!customer) {
-      // Create new customer
-      customer = new Customer({
-        customerName: lead.customerName,
-        phone: lead.phone,
-        area: lead.area,
-        carModel: lead.carModel,
-        customerType: lead.leadType,
-        leadSource: lead.leadSource,
-        totalWashes: lead.washHistory.length,
-        totalAmount: lead.washHistory.reduce((sum, wash) => sum + (wash.amount || 0), 0),
-        lastWashDate: lead.washHistory[lead.washHistory.length - 1]?.date
-      });
-      await customer.save();
-    } else {
-      // Update existing customer
-      customer.totalWashes = lead.washHistory.length;
-      customer.totalAmount = lead.washHistory.reduce((sum, wash) => sum + (wash.amount || 0), 0);
-      customer.lastWashDate = lead.washHistory[lead.washHistory.length - 1]?.date;
-      await customer.save();
-    }
-  } catch (error) {
-    console.error('Error creating/updating customer:', error);
-  }
-}
+
 
 // Start wash (for washers)
 router.put('/:id/wash-history/:entryId/start', async (req, res) => {
@@ -1244,41 +1202,6 @@ router.put('/:id/wash-history/:entryId', async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-
-
-
-// Helper function to create or update customer
-async function createOrUpdateCustomer(lead) {
-  const Customer = require('../models/Customer');
-  
-  try {
-    let customer = await Customer.findOne({ phone: lead.phone });
-    
-    if (!customer) {
-      // Create new customer
-      customer = new Customer({
-        customerName: lead.customerName,
-        phone: lead.phone,
-        area: lead.area,
-        carModel: lead.carModel,
-        customerType: lead.leadType,
-        leadSource: lead.leadSource,
-        totalWashes: lead.washHistory.length,
-        totalAmount: lead.washHistory.reduce((sum, wash) => sum + (wash.amount || 0), 0),
-        lastWashDate: lead.washHistory[lead.washHistory.length - 1]?.date
-      });
-      await customer.save();
-    } else {
-      // Update existing customer
-      customer.totalWashes = lead.washHistory.length;
-      customer.totalAmount = lead.washHistory.reduce((sum, wash) => sum + (wash.amount || 0), 0);
-      customer.lastWashDate = lead.washHistory[lead.washHistory.length - 1]?.date;
-      await customer.save();
-    }
-  } catch (error) {
-    console.error('Error creating/updating customer:', error);
-  }
-}
 
 // Convert one-time lead to monthly subscription
 router.put('/:id/convert-to-monthly', async (req, res) => {
