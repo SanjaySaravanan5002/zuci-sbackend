@@ -400,7 +400,18 @@ router.get('/washer-attendance', auth, authorize('superadmin', 'admin'), async (
       const presentDays = attendanceInRange.filter(att => att.status === 'present').length;
       const incompleteDays = attendanceInRange.filter(att => att.status === 'incomplete').length;
       const totalDays = attendanceInRange.length;
-      const totalHours = attendanceInRange.reduce((sum, att) => sum + (att.duration || 0), 0);
+      
+      // Calculate total hours properly
+      const totalHours = attendanceInRange.reduce((sum, att) => {
+        if (att.timeIn && att.timeOut) {
+          const timeInDate = new Date(att.timeIn);
+          const timeOutDate = new Date(att.timeOut);
+          const durationMs = timeOutDate.getTime() - timeInDate.getTime();
+          const durationHours = durationMs / (1000 * 60 * 60);
+          return sum + (durationHours > 0 ? durationHours : 0);
+        }
+        return sum + (att.duration || 0);
+      }, 0);
       
       let currentStatus = 'absent';
       let timeIn = null;
@@ -418,15 +429,28 @@ router.get('/washer-attendance', auth, authorize('superadmin', 'admin'), async (
       }
       
       const recentAttendance = washer.attendance ? washer.attendance
+        .filter(att => {
+          const attDate = new Date(att.date);
+          return attDate >= start && attDate <= end;
+        })
         .sort((a, b) => new Date(b.date) - new Date(a.date))
-        .slice(0, 7)
-        .map(att => ({
-          date: att.date,
-          timeIn: att.timeIn,
-          timeOut: att.timeOut,
-          duration: att.duration,
-          status: att.status
-        })) : [];
+        .slice(0, 30)
+        .map(att => {
+          let calculatedDuration = att.duration || 0;
+          if (att.timeIn && att.timeOut) {
+            const timeInDate = new Date(att.timeIn);
+            const timeOutDate = new Date(att.timeOut);
+            const durationMs = timeOutDate.getTime() - timeInDate.getTime();
+            calculatedDuration = durationMs / (1000 * 60); // Duration in minutes
+          }
+          return {
+            date: att.date,
+            timeIn: att.timeIn,
+            timeOut: att.timeOut,
+            duration: calculatedDuration,
+            status: att.status
+          };
+        }) : [];
       
       attendanceData.push({
         id: washer.id,
