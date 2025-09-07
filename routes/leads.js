@@ -1043,6 +1043,46 @@ router.put('/:id/wash-history/:entryId/end', async (req, res) => {
   }
 });
 
+// Reschedule wash date
+router.put('/:id/reschedule', async (req, res) => {
+  try {
+    const { newDate, washType } = req.body;
+    const lead = await Lead.findOne({ id: parseInt(req.params.id) });
+    
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    // Update monthly subscription scheduled wash
+    if (lead.monthlySubscription?.scheduledWashes) {
+      const washToUpdate = lead.monthlySubscription.scheduledWashes.find(w => 
+        w.status === 'scheduled' || w.status === 'pending'
+      );
+      
+      if (washToUpdate) {
+        washToUpdate.scheduledDate = new Date(newDate);
+      }
+    }
+
+    // Update wash history entry
+    if (lead.washHistory?.length > 0) {
+      const pendingWash = lead.washHistory.find(w => 
+        w.washStatus === 'scheduled' || w.washStatus === 'pending'
+      );
+      
+      if (pendingWash) {
+        pendingWash.date = new Date(newDate);
+        pendingWash.washType = washType;
+      }
+    }
+
+    await lead.save();
+    res.json({ message: 'Wash rescheduled successfully', lead });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Update wash history entry (for washers to update status, payment, feedback)
 router.put('/:id/wash-history/:entryId', async (req, res) => {
   try {
