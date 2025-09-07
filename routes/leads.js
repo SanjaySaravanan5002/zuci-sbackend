@@ -497,13 +497,37 @@ router.get('/washer/:washerId/monthly-subscriptions', async (req, res) => {
   }
 });
 
-// Create new lead
+// Create new lead with enhanced wash entry support
 router.post('/', async (req, res) => {
   try {
+    const {
+      name,
+      phone,
+      area,
+      carModel,
+      carNumber,
+      vehicleNumber,
+      leadType,
+      leadSource,
+      notes,
+      coordinates,
+      assignedWasher,
+      oneTimeWash,
+      monthlySubscription
+    } = req.body;
+
+    // Validate required fields
+    if (!name || !phone || !area || !carModel || !leadType || !leadSource) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Missing required fields: name, phone, area, carModel, leadType, leadSource' 
+      });
+    }
+
     // For one-time leads, check if customer already exists
-    if (req.body.leadType === 'One-time') {
+    if (leadType === 'One-time') {
       const existingLead = await Lead.findOne({ 
-        phone: req.body.phone,
+        phone: phone,
         leadType: 'One-time'
       });
       
@@ -511,34 +535,107 @@ router.post('/', async (req, res) => {
         // Return existing lead instead of creating new one
         const populatedLead = await Lead.findById(existingLead._id)
           .populate('assignedWasher', 'name');
-        return res.status(200).json(populatedLead);
+        return res.status(200).json({
+          success: true,
+          data: populatedLead,
+          message: 'Existing customer found'
+        });
       }
     }
 
-    const lead = new Lead({
-      customerName: req.body.name,
-      phone: req.body.phone,
-      area: req.body.area,
-      carModel: req.body.carModel,
-      leadType: req.body.leadType,
-      leadSource: req.body.leadSource,
-      assignedWasher: req.body.assignedWasher,
-      notes: req.body.notes,
+    const leadData = {
+      customerName: name,
+      phone,
+      area,
+      carModel,
+      vehicleNumber: carNumber || vehicleNumber,
+      leadType,
+      leadSource,
+      assignedWasher,
+      notes,
       status: 'New',
       location: {
         type: 'Point',
-        coordinates: req.body.coordinates || [0, 0] // Default coordinates if not provided
+        coordinates: coordinates || [0, 0]
       }
-    });
+    };
 
-    const newLead = await lead.save();
+    // Handle one-time wash
+    if (leadType === 'One-time' && oneTimeWash) {
+      leadData.oneTimeWash = {
+        washType: oneTimeWash.washType,
+        amount: oneTimeWash.amount,
+        scheduledDate: new Date(oneTimeWash.scheduledDate),
+        scheduledTime: oneTimeWash.scheduledTime,
+        serviceType: oneTimeWash.serviceType,
+        status: 'scheduled'
+      };
+      leadData.status = 'Converted';
+    }
+
+    // Handle monthly subscription
+    if (leadType === 'Monthly' && monthlySubscription) {
+      const startDate = new Date(monthlySubscription.startDate);
+      const endDate = new Date(monthlySubscription.endDate);
+      
+      leadData.monthlySubscription = {
+        packageType: monthlySubscription.packageType,
+        customPlanName: monthlySubscription.customPlanName,
+        totalWashes: monthlySubscription.totalWashes,
+        totalInteriorWashes: monthlySubscription.interiorWashes,
+        monthlyPrice: monthlySubscription.totalAmount,
+        startDate,
+        endDate,
+        isActive: true,
+        completedWashes: 0,
+        scheduledWashes: monthlySubscription.scheduledWashes?.map((wash, index) => ({
+          washNumber: wash.washNumber,
+          scheduledDate: new Date(wash.scheduledDate),
+          scheduledTime: wash.scheduledTime,
+          serviceType: wash.serviceType,
+          carName: wash.carName,
+          carNumber: wash.carNumber,
+          status: 'scheduled',
+          amount: Math.round(monthlySubscription.totalAmount / monthlySubscription.totalWashes)
+        })) || []
+      };
+      
+      // Auto-convert to customer status for monthly subscriptions
+      leadData.status = 'Converted';
+      
+      // Add wash history entries for each scheduled wash
+      leadData.washHistory = monthlySubscription.scheduledWashes?.map(wash => ({
+        washType: monthlySubscription.packageType,
+        washer: null,
+        amount: Math.round(monthlySubscription.totalAmount / monthlySubscription.totalWashes),
+        date: new Date(wash.scheduledDate),
+        feedback: '',
+        is_amountPaid: false,
+        washStatus: 'pending',
+        washServiceType: wash.serviceType
+      })) || [];
+    }
+
+    const newLead = new Lead(leadData);
+    await newLead.save();
+    
     // Populate the washer information before sending response
     const populatedLead = await Lead.findById(newLead._id)
-      .populate('assignedWasher', 'name');
-
-    res.status(201).json(populatedLead);
+      .populate('assignedWasher', 'name')
+      .populate('oneTimeWash.washer', 'name')
+      .populate('monthlySubscription.scheduledWashes.washer', 'name');
+    
+    res.status(201).json({
+      success: true,
+      data: populatedLead,
+      message: `${leadType} wash entry created successfully`
+    });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    console.error('Error creating lead:', error);
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
   }
 });
 
