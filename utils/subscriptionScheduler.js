@@ -18,15 +18,17 @@ const generateScheduledWashes = (subscription, startDate = null, endDate = null)
   const subscriptionStart = startDate || new Date(subscription.startDate);
   const subscriptionEnd = endDate || new Date(subscription.endDate);
   
-  // Calculate interval between washes
-  const totalDaysInSubscription = Math.ceil((subscriptionEnd - subscriptionStart) / (1000 * 60 * 60 * 24));
-  const totalWashesInPeriod = Math.ceil(totalDaysInSubscription / 30) * subscription.totalWashes;
+  // Calculate interval between washes for one month only
+  const totalDaysInSubscription = 30; // Fixed to 30 days for one month
+  const totalWashesInPeriod = subscription.totalWashes; // Use total washes as-is for one month
   const daysBetweenWashes = Math.floor(totalDaysInSubscription / totalWashesInPeriod);
   
   let currentDate = new Date(subscriptionStart);
   let washNumber = 1;
+  const oneMonthEnd = new Date(subscriptionStart);
+  oneMonthEnd.setDate(oneMonthEnd.getDate() + 30);
   
-  while (currentDate <= subscriptionEnd && washNumber <= totalWashesInPeriod) {
+  while (currentDate <= oneMonthEnd && washNumber <= totalWashesInPeriod) {
     scheduledWashes.push({
       washNumber: washNumber,
       scheduledDate: new Date(currentDate),
