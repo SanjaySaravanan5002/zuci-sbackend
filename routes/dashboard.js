@@ -10,19 +10,17 @@ router.get('/test', (req, res) => {
   res.json({ message: 'Dashboard API is working', timestamp: new Date().toISOString() });
 });
 
-// Clear sample attendance data
+// Clear ALL attendance data and reset to empty
 router.post('/clear-sample-attendance', auth, authorize('superadmin', 'admin'), async (req, res) => {
   try {
-    const washers = await User.find({ role: 'washer' });
-    
-    for (const washer of washers) {
-      washer.attendance = [];
-      await washer.save();
-    }
+    const result = await User.updateMany(
+      { role: 'washer' },
+      { $set: { attendance: [] } }
+    );
     
     res.json({ 
-      message: 'Sample attendance data cleared successfully',
-      washersUpdated: washers.length
+      message: 'All attendance data cleared successfully - now showing real values only',
+      washersUpdated: result.modifiedCount
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -477,7 +475,7 @@ router.get('/washer-attendance', auth, authorize('superadmin', 'admin'), async (
           };
         }) : [];
       
-      // Only show washers with real attendance data or show all with zero values
+      // Show all washers with real attendance data (no fake data)
       attendanceData.push({
         id: washer.id,
         name: washer.name,
@@ -489,7 +487,7 @@ router.get('/washer-attendance', auth, authorize('superadmin', 'admin'), async (
         timeOut,
         presentDays,
         incompleteDays,
-        totalDays: attendanceInRange.length,
+        totalDays: attendanceInRange.length || 0,
         totalHours: parseFloat(totalHours.toFixed(1)),
         attendancePercentage: attendanceInRange.length > 0 ? ((presentDays / attendanceInRange.length) * 100).toFixed(1) : '0.0',
         recentAttendance
