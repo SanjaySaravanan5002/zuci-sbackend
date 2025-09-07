@@ -427,21 +427,24 @@ router.get('/washer-attendance', auth, authorize('superadmin', 'admin'), async (
     const attendanceData = [];
     
     for (const washer of washers) {
+      // Get today's attendance record
       const todayAttendance = washer.attendance ? washer.attendance.find(att => {
         const attDate = new Date(att.date);
         return attDate.toDateString() === start.toDateString();
       }) : null;
       
+      // Get attendance records in the selected date range
       const attendanceInRange = washer.attendance ? washer.attendance.filter(att => {
         const attDate = new Date(att.date);
         return attDate >= start && attDate <= end;
       }) : [];
       
-      const presentDays = attendanceInRange.filter(att => att.status === 'present').length;
-      const incompleteDays = attendanceInRange.filter(att => att.status === 'incomplete').length;
-      const totalDays = attendanceInRange.length;
+      // Count present days (those with both timeIn and timeOut)
+      const presentDays = attendanceInRange.filter(att => att.timeIn && att.timeOut).length;
+      const incompleteDays = attendanceInRange.filter(att => att.timeIn && !att.timeOut).length;
+      const totalDays = Math.max(attendanceInRange.length, 1); // Avoid division by zero
       
-      // Calculate total hours properly
+      // Calculate total hours from actual clock-in/out times
       const totalHours = attendanceInRange.reduce((sum, att) => {
         if (att.timeIn && att.timeOut) {
           const timeInDate = new Date(att.timeIn);
@@ -450,9 +453,10 @@ router.get('/washer-attendance', auth, authorize('superadmin', 'admin'), async (
           const durationHours = durationMs / (1000 * 60 * 60);
           return sum + (durationHours > 0 ? durationHours : 0);
         }
-        return sum + (att.duration || 0);
+        return sum;
       }, 0);
       
+      // Determine current status based on today's attendance
       let currentStatus = 'absent';
       let timeIn = null;
       let timeOut = null;
@@ -463,11 +467,12 @@ router.get('/washer-attendance', auth, authorize('superadmin', 'admin'), async (
         
         if (timeIn && timeOut) {
           currentStatus = 'completed';
-        } else if (timeIn) {
+        } else if (timeIn && !timeOut) {
           currentStatus = 'active';
         }
       }
       
+      // Format recent attendance for display
       const recentAttendance = washer.attendance ? washer.attendance
         .filter(att => {
           const attDate = new Date(att.date);
@@ -476,22 +481,23 @@ router.get('/washer-attendance', auth, authorize('superadmin', 'admin'), async (
         .sort((a, b) => new Date(b.date) - new Date(a.date))
         .slice(0, 30)
         .map(att => {
-          let calculatedDuration = att.duration || 0;
+          let calculatedDuration = 0;
           if (att.timeIn && att.timeOut) {
             const timeInDate = new Date(att.timeIn);
             const timeOutDate = new Date(att.timeOut);
             const durationMs = timeOutDate.getTime() - timeInDate.getTime();
-            calculatedDuration = durationMs / (1000 * 60); // Duration in minutes
+            calculatedDuration = durationMs / (1000 * 60 * 60); // Duration in hours
           }
           return {
             date: att.date,
             timeIn: att.timeIn,
             timeOut: att.timeOut,
             duration: calculatedDuration,
-            status: att.status
+            status: att.timeIn && att.timeOut ? 'present' : att.timeIn ? 'incomplete' : 'absent'
           };
         }) : [];
       
+      // Only show washers with real attendance data or show all with zero values
       attendanceData.push({
         id: washer.id,
         name: washer.name,
@@ -503,9 +509,9 @@ router.get('/washer-attendance', auth, authorize('superadmin', 'admin'), async (
         timeOut,
         presentDays,
         incompleteDays,
-        totalDays,
-        totalHours: parseFloat(totalHours.toFixed(2)),
-        attendancePercentage: totalDays > 0 ? ((presentDays / totalDays) * 100).toFixed(1) : '0',
+        totalDays: attendanceInRange.length,
+        totalHours: parseFloat(totalHours.toFixed(1)),
+        attendancePercentage: attendanceInRange.length > 0 ? ((presentDays / attendanceInRange.length) * 100).toFixed(1) : '0.0',
         recentAttendance
       });
     }
