@@ -15,22 +15,32 @@ router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // For demo purposes, we're using simple authentication
-    // In production, you should use proper password hashing
+    // Validate input
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+
+    console.log('Login attempt for email:', email);
     
     // Find user by email
     const user = await User.findOne({ email });
 
     // Check if user exists
     if (!user) {
+      console.log('User not found:', email);
       return res.status(400).json({ message: 'Invalid credentials' });
     }
+
+    console.log('User found:', user.email, 'Role:', user.role);
 
     // Check password using bcrypt.compare
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
+      console.log('Password mismatch for user:', email);
       return res.status(400).json({ message: 'Invalid credentials' });
     }
+
+    console.log('Password match successful for user:', email);
 
     // User matched, create JWT token
     const payload = {
@@ -39,6 +49,8 @@ router.post('/login', async (req, res) => {
     };
     
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '2d' });
+
+    console.log('Token generated successfully for user:', email);
 
     // Return user info without password and with token
     res.json({
@@ -52,7 +64,7 @@ router.post('/login', async (req, res) => {
     });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
@@ -77,6 +89,15 @@ router.get('/me', auth, async (req, res) => {
     console.error('Get user error:', error);
     res.status(500).json({ message: 'Server error' });
   }
+});
+
+/**
+ * @route   GET /api/auth/test
+ * @desc    Test auth endpoint
+ * @access  Public
+ */
+router.get('/test', (req, res) => {
+  res.json({ message: 'Auth endpoint is working', timestamp: new Date().toISOString() });
 });
 
 /**
