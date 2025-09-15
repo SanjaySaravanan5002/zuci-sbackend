@@ -5,6 +5,7 @@ const upload = multer();
 const Lead = require('../models/Lead');
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
+const { auth, authorize } = require('../middleware/auth');
 
 // Get list of all washers with their summary
 // Query parameter: forAssignment=true to get only active washers for assignment dropdowns
@@ -905,27 +906,47 @@ router.post('/:id/upload-photos', upload.fields([
 // Update attendance (Edit Present/Absent)
 router.put('/:id/attendance/:attendanceId', async (req, res) => {
   try {
-    const { status, timeIn, timeOut } = req.body;
+    const { status } = req.body;
     const washer = await User.findOne({ id: parseInt(req.params.id) });
 
     if (!washer) {
       return res.status(404).json({ message: 'Washer not found' });
     }
 
-    const attendance = washer.attendance.id(req.params.attendanceId);
-    if (!attendance) {
-      return res.status(404).json({ message: 'Attendance record not found' });
+    // Initialize attendance array if it doesn't exist
+    if (!washer.attendance) {
+      washer.attendance = [];
     }
 
-    // Update attendance status
-    if (status) attendance.status = status;
-    if (timeIn) attendance.timeIn = new Date(timeIn);
-    if (timeOut) {
-      attendance.timeOut = new Date(timeOut);
-      // Recalculate duration
-      if (attendance.timeIn) {
-        const duration = (new Date(timeOut) - attendance.timeIn) / (1000 * 60 * 60);
-        attendance.duration = parseFloat(duration.toFixed(2));
+    // Find or create attendance record for today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    let attendance = washer.attendance.find(att => {
+      const attDate = new Date(att.date);
+      attDate.setHours(0, 0, 0, 0);
+      return attDate.getTime() === today.getTime();
+    });
+
+    if (!attendance) {
+      // Create new attendance record
+      attendance = {
+        date: today,
+        status: status,
+        timeIn: status === 'present' ? new Date() : null,
+        timeOut: null,
+        duration: 0
+      };
+      washer.attendance.push(attendance);
+    } else {
+      // Update existing record
+      attendance.status = status;
+      if (status === 'present' && !attendance.timeIn) {
+        attendance.timeIn = new Date();
+      } else if (status === 'absent') {
+        attendance.timeIn = null;
+        attendance.timeOut = null;
+        attendance.duration = 0;
       }
     }
 
