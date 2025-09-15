@@ -302,48 +302,7 @@ router.get('/lead-acquisition', auth, authorize('superadmin', 'admin'), async (r
   }
 });
 
-// Get washer performance data
-router.get('/washer-performance', auth, authorize('superadmin', 'admin'), async (req, res) => {
-  try {
-    const currentDate = new Date();
-    const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-    
-    const washers = await User.find({ role: 'washer' });
-    const performanceData = [];
-    
-    for (const washer of washers) {
-      const leads = await Lead.find({
-        'washHistory': {
-          $elemMatch: {
-            washer: washer._id,
-            date: { $gte: firstDayOfMonth },
-            washStatus: 'completed'
-          }
-        }
-      });
 
-      const washCount = leads.reduce((total, lead) => {
-        return total + lead.washHistory.filter(wash => 
-          wash.washer && wash.washer.toString() === washer._id.toString() &&
-          wash.washStatus === 'completed' &&
-          new Date(wash.date) >= firstDayOfMonth
-        ).length;
-      }, 0);
-      
-      performanceData.push({
-        name: washer.name,
-        washes: washCount
-      });
-    }
-    
-    performanceData.sort((a, b) => b.washes - a.washes);
-    
-    res.json(performanceData);
-  } catch (error) {
-    console.error('Error in /washer-performance:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
 
 // Get recent leads
 router.get('/recent-leads', auth, authorize('superadmin', 'admin'), async (req, res) => {
@@ -954,6 +913,179 @@ router.get('/expenses-stats', auth, authorize('superadmin', 'admin'), async (req
       value: 0,
       change: 0,
       increasing: false
+    });
+  }
+});
+
+// Get washer performance metrics
+router.get('/washer-performance', auth, authorize('superadmin', 'admin'), async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    // Default to current month if no dates provided
+    let start, end;
+    if (startDate && endDate) {
+      start = new Date(startDate);
+      end = new Date(endDate);
+    } else {
+      const now = new Date();
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    }
+    
+    start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
+    
+    // Get all washers
+    const washers = await User.find({ role: 'washer' }).lean();
+    
+    if (washers.length === 0) {
+      return res.json({
+        totalWashers: 0,
+        activeWashers: 0,
+        totalWashes: 0,
+        avgRating: 0,
+        avgAttendance: 0,
+        washers: []
+      });
+    }
+    
+    const washerPerformance = [];
+    let totalWashes = 0;
+    let totalRatings = 0;
+    let ratingCount = 0;
+    let totalAttendancePercentage = 0;
+    let activeWashers = 0;
+    
+    for (const washer of washers) {
+      // Get washes assigned to this washer in the date range
+      const washHistory = await Lead.aggregate([
+        { $unwind: '$washHistory' },
+        {
+          $match: {
+            'washHistory.washer': washer._id,
+            'washHistory.date': { $gte: start, $lte: end }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalWashes: { $sum: 1 },
+            completedWashes: {
+              $sum: { $cond: [{ $eq: ['$washHistory.washStatus', 'completed'] }, 1, 0] }
+            },
+            totalEarnings: {
+              $sum: { $cond: [{ $eq: ['$washHistory.is_amountPaid', true] }, '$washHistory.amount', 0] }
+            },
+            ratings: {
+              $push: {
+                $cond: [
+                  { $and: [{ $ne: ['$washHistory.feedback', null] }, { $ne: ['$washHistory.feedback', ''] }] },
+                  4, // Default rating when feedback exists
+                  null
+                ]
+              }
+            }
+          }
+        }
+      ]);
+      
+      // Get monthly subscription washes
+      const monthlyWashes = await Lead.aggregate([
+        { $unwind: '$monthlySubscription.scheduledWashes' },
+        {
+          $match: {
+            'monthlySubscription.scheduledWashes.washer': washer._id,
+            'monthlySubscription.scheduledWashes.scheduledDate': { $gte: start, $lte: end }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalWashes: { $sum: 1 },
+            completedWashes: {
+              $sum: { $cond: [{ $eq: ['$monthlySubscription.scheduledWashes.status', 'completed'] }, 1, 0] }
+            },
+            totalEarnings: {
+              $sum: { $cond: [{ $eq: ['$monthlySubscription.scheduledWashes.is_amountPaid', true] }, '$monthlySubscription.scheduledWashes.amount', 0] }
+            }
+          }
+        }
+      ]);
+      
+      const washData = washHistory[0] || { totalWashes: 0, completedWashes: 0, totalEarnings: 0, ratings: [] };
+      const monthlyData = monthlyWashes[0] || { totalWashes: 0, completedWashes: 0, totalEarnings: 0 };
+      
+      const washerTotalWashes = washData.totalWashes + monthlyData.totalWashes;
+      const washerCompletedWashes = washData.completedWashes + monthlyData.completedWashes;
+      const washerEarnings = washData.totalEarnings + monthlyData.totalEarnings;
+      
+      // Calculate success rate
+      const successRate = washerTotalWashes > 0 ? Math.round((washerCompletedWashes / washerTotalWashes) * 100) : 0;
+      
+      // Calculate average rating from feedback
+      const validRatings = washData.ratings.filter(r => r !== null);
+      const avgRating = validRatings.length > 0 ? validRatings.reduce((sum, r) => sum + r, 0) / validRatings.length : 0;
+      
+      // Calculate attendance percentage for the period
+      let attendancePercentage = 0;
+      if (washer.attendance && washer.attendance.length > 0) {
+        const attendanceInRange = washer.attendance.filter(att => {
+          const attDate = new Date(att.date);
+          return attDate >= start && attDate <= end;
+        });
+        
+        const presentDays = attendanceInRange.filter(att => att.status === 'present' || (att.timeIn && att.timeOut)).length;
+        attendancePercentage = attendanceInRange.length > 0 ? Math.round((presentDays / attendanceInRange.length) * 100) : 0;
+      }
+      
+      // Count as active if has any washes or attendance
+      if (washerTotalWashes > 0 || attendancePercentage > 0) {
+        activeWashers++;
+      }
+      
+      washerPerformance.push({
+        id: washer._id,
+        name: washer.name,
+        totalWashes: washerTotalWashes,
+        completedWashes: washerCompletedWashes,
+        successRate,
+        rating: Math.round(avgRating * 10) / 10,
+        attendancePercentage,
+        earnings: Math.round(washerEarnings || 0)
+      });
+      
+      // Add to totals
+      totalWashes += washerTotalWashes;
+      if (avgRating > 0) {
+        totalRatings += avgRating;
+        ratingCount++;
+      }
+      totalAttendancePercentage += attendancePercentage;
+    }
+    
+    const avgRating = ratingCount > 0 ? Math.round((totalRatings / ratingCount) * 10) / 10 : 0;
+    const avgAttendance = washers.length > 0 ? Math.round(totalAttendancePercentage / washers.length) : 0;
+    
+    res.json({
+      totalWashers: washers.length,
+      activeWashers,
+      totalWashes,
+      avgRating,
+      avgAttendance,
+      washers: washerPerformance.sort((a, b) => b.totalWashes - a.totalWashes)
+    });
+    
+  } catch (error) {
+    console.error('Error in /washer-performance:', error);
+    res.status(500).json({ 
+      error: error.message,
+      totalWashers: 0,
+      activeWashers: 0,
+      totalWashes: 0,
+      avgRating: 0,
+      avgAttendance: 0,
+      washers: []
     });
   }
 });
