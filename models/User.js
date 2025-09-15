@@ -40,6 +40,10 @@ const userSchema = new mongoose.Schema({
     data: String, // base64
     contentType: String
   },
+  profilePhoto: {
+    data: String, // base64
+    contentType: String
+  },
   id: {
     type: Number,
     unique: true
@@ -69,8 +73,14 @@ const userSchema = new mongoose.Schema({
   },
   area: String,
   salary: {
-    base: Number,
-    bonus: Number
+    base: {
+      type: Number,
+      default: 0
+    },
+    bonus: {
+      type: Number,
+      default: 0
+    }
   },
   attendance: [attendanceSchema],
   status: {
