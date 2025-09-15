@@ -327,6 +327,52 @@ router.get('/customers', auth, authorize('superadmin', 'admin', 'limited_admin')
   }
 });
 
+// Debug endpoint to check washer data availability
+router.get('/washers/debug', auth, authorize('superadmin', 'admin', 'limited_admin'), async (req, res) => {
+  try {
+    // Check washers in database
+    const totalWashers = await User.countDocuments({ role: 'washer' });
+    const washers = await User.find({ role: 'washer' }).select('name phone email status').lean();
+    
+    // Check leads with wash history
+    const leadsWithWashes = await Lead.countDocuments({ 'washHistory.0': { $exists: true } });
+    const completedWashes = await Lead.countDocuments({ 'washHistory.washStatus': 'completed' });
+    const washesWithWashers = await Lead.countDocuments({ 'washHistory.washer': { $ne: null } });
+    
+    // Check monthly subscriptions
+    const monthlyLeads = await Lead.countDocuments({ leadType: 'Monthly' });
+    const monthlyWithWashes = await Lead.countDocuments({ 'monthlySubscription.scheduledWashes.0': { $exists: true } });
+    
+    // Sample wash data
+    const sampleWashes = await Lead.find({ 'washHistory.0': { $exists: true } })
+      .select('customerName washHistory.washer washHistory.washStatus washHistory.date')
+      .limit(3)
+      .lean();
+    
+    res.json({
+      database_status: {
+        total_washers: totalWashers,
+        washers_list: washers,
+        leads_with_washes: leadsWithWashes,
+        completed_washes: completedWashes,
+        washes_with_assigned_washers: washesWithWashers,
+        monthly_leads: monthlyLeads,
+        monthly_with_scheduled_washes: monthlyWithWashes
+      },
+      sample_data: {
+        sample_washes: sampleWashes
+      },
+      recommendations: {
+        need_washers: totalWashers === 0,
+        need_wash_assignments: washesWithWashers === 0,
+        need_completed_washes: completedWashes === 0
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Washer Reports - Available to all admin types
 router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), async (req, res) => {
   try {
@@ -346,9 +392,14 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
     
     if (allWashers.length === 0) {
       return res.json({
-        message: 'No washers found',
+        message: 'No washers found in database. Please add washers first.',
         washers: [],
-        totalWashers: 0
+        totalWashers: 0,
+        debug_info: {
+          total_users: await User.countDocuments(),
+          washer_users: await User.countDocuments({ role: 'washer' }),
+          all_roles: await User.distinct('role')
+        }
       });
     }
     
@@ -523,25 +574,22 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
           { $sort: { lastWashDate: -1 } }
         ]);
 
-        // Get attendance data for the period
+        // Get attendance data (all-time for reports)
         let attendance = null;
-        if (washerDetails?.attendance) {
-          const attendanceData = washerDetails.attendance.filter(att => {
-            if (!startDate || !endDate) return true;
-            const attDate = new Date(att.date);
-            return attDate >= new Date(startDate) && attDate <= new Date(endDate);
-          });
-          
-          const presentDays = attendanceData.filter(att => att.status === 'present').length;
+        if (washerDetails?.attendance && washerDetails.attendance.length > 0) {
+          const attendanceData = washerDetails.attendance;
+          const presentDays = attendanceData.filter(att => 
+            att.status === 'present' || (att.timeIn && att.timeOut)
+          ).length;
           const totalDays = attendanceData.length;
           
           attendance = {
             presentDays,
             totalDays,
             percentage: totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 0,
-            details: attendanceData.map(att => ({
+            details: attendanceData.slice(-30).map(att => ({
               date: att.date,
-              status: att.status,
+              status: att.status || (att.timeIn && att.timeOut ? 'present' : 'absent'),
               timeIn: att.timeIn,
               timeOut: att.timeOut,
               duration: att.duration
@@ -551,9 +599,9 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
 
         // Calculate performance metrics
         const performance = {
-          avgWashesPerDay: attendance?.presentDays > 0 ? Math.round(washerData.totalWashes / attendance.presentDays * 10) / 10 : 0,
+          avgWashesPerDay: attendance?.presentDays > 0 ? Math.round((washerData.totalWashes / attendance.presentDays) * 10) / 10 : 0,
           avgRevenuePerWash: washerData.totalWashes > 0 ? Math.round(washerData.totalRevenue / washerData.totalWashes) : 0,
-          completionRate: washerData.totalWashes > 0 ? Math.round((washerData.totalWashes / washerData.totalWashes) * 100) : 100
+          completionRate: 100 // Assuming all assigned washes are completed
         };
 
         return {
