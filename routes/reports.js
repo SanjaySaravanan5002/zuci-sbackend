@@ -265,6 +265,100 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
     const washers = await Promise.all(
       Array.from(combinedData.values()).map(async (washer) => {
         const washerDetails = await User.findById(washer._id);
+        
+        // Get monthly wash count
+        const monthlyWashCount = await Lead.aggregate([
+          { $unwind: '$washHistory' },
+          {
+            $match: {
+              'washHistory.washer': washer._id,
+              'washHistory.washStatus': 'completed',
+              ...(startDate && endDate && {
+                'washHistory.date': { $gte: new Date(startDate), $lte: new Date(endDate) }
+              })
+            }
+          },
+          {
+            $group: {
+              _id: {
+                year: { $year: '$washHistory.date' },
+                month: { $month: '$washHistory.date' }
+              },
+              count: { $sum: 1 },
+              revenue: { $sum: { $toDouble: '$washHistory.amount' } }
+            }
+          },
+          { $sort: { '_id.year': -1, '_id.month': -1 } }
+        ]);
+
+        // Get customer details with dates
+        const customerDetails = await Lead.aggregate([
+          { $unwind: '$washHistory' },
+          {
+            $match: {
+              'washHistory.washer': washer._id,
+              'washHistory.washStatus': 'completed',
+              ...(startDate && endDate && {
+                'washHistory.date': { $gte: new Date(startDate), $lte: new Date(endDate) }
+              })
+            }
+          },
+          {
+            $group: {
+              _id: '$_id',
+              customerName: { $first: '$customerName' },
+              area: { $first: '$area' },
+              phone: { $first: '$phone' },
+              totalAmount: { $sum: { $toDouble: '$washHistory.amount' } },
+              washCount: { $sum: 1 },
+              lastWashDate: { $max: '$washHistory.date' },
+              firstWashDate: { $min: '$washHistory.date' },
+              washes: {
+                $push: {
+                  date: '$washHistory.date',
+                  type: '$washHistory.washType',
+                  amount: '$washHistory.amount',
+                  feedback: '$washHistory.feedback'
+                }
+              }
+            }
+          },
+          { $sort: { lastWashDate: -1 } }
+        ]);
+
+        // Get attendance data for the period
+        let attendance = null;
+        if (washerDetails?.attendance) {
+          const attendanceData = washerDetails.attendance.filter(att => {
+            if (!startDate || !endDate) return true;
+            const attDate = new Date(att.date);
+            return attDate >= new Date(startDate) && attDate <= new Date(endDate);
+          });
+          
+          const presentDays = attendanceData.filter(att => att.status === 'present').length;
+          const totalDays = attendanceData.length;
+          
+          attendance = {
+            presentDays,
+            totalDays,
+            percentage: totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 0,
+            details: attendanceData.map(att => ({
+              date: att.date,
+              status: att.status,
+              timeIn: att.timeIn,
+              timeOut: att.timeOut,
+              duration: att.duration
+            }))
+          };
+        }
+
+        // Calculate performance metrics
+        const performance = {
+          avgWashesPerDay: attendance?.presentDays > 0 ? Math.round(washer.totalWashes / attendance.presentDays * 10) / 10 : 0,
+          avgRevenuePerWash: washer.totalWashes > 0 ? Math.round(washer.totalRevenue / washer.totalWashes) : 0,
+          completionRate: washer.totalWashes > 0 ? Math.round((washer.totalWashes / washer.totalWashes) * 100) : 100
+        };
+
         return {
           _id: washer._id,
           totalWashes: washer.totalWashes,
@@ -273,7 +367,22 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
           washerName: washerDetails?.name || 'Unknown Washer',
           washerPhone: washerDetails?.phone || 'N/A',
           washerEmail: washerDetails?.email || 'N/A',
-          washerStatus: washerDetails?.status || 'Unknown'
+          washerStatus: washerDetails?.status || 'Unknown',
+          monthlyWashCount,
+          customerDetails,
+          attendance,
+          performance
+        };
+      })
+    );
+
+    res.json(washers);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+module.exports = router;tails?.status || 'Unknown'
         };
       })
     );
