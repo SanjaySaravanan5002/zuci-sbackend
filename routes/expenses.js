@@ -111,7 +111,35 @@ router.delete('/:id', auth, authorize('superadmin', 'admin'), async (req, res) =
   }
 });
 
-// Get salary calculation data
+// Get washer expenses
+router.get('/washer/:washerId', auth, authorize('superadmin', 'admin'), async (req, res) => {
+  try {
+    const { washerId } = req.params;
+    const { month, year } = req.query;
+    
+    const targetMonth = month ? parseInt(month) - 1 : new Date().getMonth();
+    const targetYear = year ? parseInt(year) : new Date().getFullYear();
+    
+    const startDate = new Date(targetYear, targetMonth, 1);
+    const endDate = new Date(targetYear, targetMonth + 1, 0);
+    
+    const washer = await User.findById(washerId);
+    if (!washer) {
+      return res.status(404).json({ success: false, message: 'Washer not found' });
+    }
+    
+    const expenses = await Expense.find({
+      washerName: washer.name,
+      date: { $gte: startDate, $lte: endDate }
+    }).sort({ date: -1 });
+    
+    res.json(expenses);
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get salary calculation data with new logic
 router.get('/salary-calculation', auth, authorize('superadmin', 'admin'), async (req, res) => {
   try {
     const { month, year, washerId } = req.query;
@@ -121,10 +149,9 @@ router.get('/salary-calculation', auth, authorize('superadmin', 'admin'), async 
     
     const startDate = new Date(targetYear, targetMonth, 1);
     const endDate = new Date(targetYear, targetMonth + 1, 0);
+    const totalWorkingDays = endDate.getDate();
 
-    // Get all washers or specific washer
-    const User = require('../models/User');
-    let washerQuery = { role: 'washer', status: 'Active' };
+    let washerQuery = { role: 'washer' };
     if (washerId) {
       washerQuery._id = washerId;
     }
@@ -133,7 +160,7 @@ router.get('/salary-calculation', auth, authorize('superadmin', 'admin'), async 
     const salaryData = [];
 
     for (const washer of washers) {
-      // Get completed washes for this washer in the month
+      // Get completed washes
       const Lead = require('../models/Lead');
       const completedWashes = await Lead.aggregate([
         { $unwind: '$washHistory' },
@@ -141,38 +168,43 @@ router.get('/salary-calculation', auth, authorize('superadmin', 'admin'), async 
           $match: {
             'washHistory.washer': washer._id,
             'washHistory.washStatus': 'completed',
-            'washHistory.date': {
-              $gte: startDate,
-              $lte: endDate
-            }
+            'washHistory.date': { $gte: startDate, $lte: endDate }
           }
         },
-        {
-          $group: {
-            _id: null,
-            totalWashes: { $sum: 1 },
-            totalRevenue: { $sum: '$washHistory.amount' }
-          }
-        }
+        { $group: { _id: null, totalWashes: { $sum: 1 } } }
       ]);
 
       // Get attendance data
-      const attendanceData = washer.attendance.filter(att => {
+      const attendanceData = washer.attendance?.filter(att => {
         const attDate = new Date(att.date);
         return attDate >= startDate && attDate <= endDate;
-      });
+      }) || [];
 
       const presentDays = attendanceData.filter(att => att.status === 'present').length;
-      const totalWorkingDays = new Date(targetYear, targetMonth + 1, 0).getDate();
+      
+      // Get expenses
+      const expenses = await Expense.find({
+        washerName: washer.name,
+        date: { $gte: startDate, $lte: endDate }
+      });
+      const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
 
-      // Calculate salary
+      // Calculate salary with new logic
       const baseSalary = washer.salary?.base || 0;
       const bonus = washer.salary?.bonus || 0;
       const washCount = completedWashes[0]?.totalWashes || 0;
-      const revenue = completedWashes[0]?.totalRevenue || 0;
       
-      // Simple salary calculation: base + (bonus per wash)
-      const totalSalary = baseSalary + (bonus * washCount);
+      // Calculate loss of pay
+      const absentDays = totalWorkingDays - presentDays;
+      const perDaySalary = baseSalary / totalWorkingDays;
+      const lossOfPay = absentDays * perDaySalary;
+      const salaryAfterAttendance = baseSalary - lossOfPay;
+      
+      // Final salary calculation
+      const bonusEarned = bonus * washCount;
+      const salaryWithBonus = salaryAfterAttendance + bonusEarned;
+      const finalSalary = Math.max(0, salaryWithBonus - totalExpenses);
+      
       const attendancePercentage = totalWorkingDays > 0 ? (presentDays / totalWorkingDays) * 100 : 0;
 
       salaryData.push({
@@ -181,11 +213,12 @@ router.get('/salary-calculation', auth, authorize('superadmin', 'admin'), async 
         baseSalary,
         bonus,
         washCount,
-        revenue,
         presentDays,
         totalWorkingDays,
         attendancePercentage: attendancePercentage.toFixed(1),
-        totalSalary,
+        expenses: totalExpenses,
+        lossOfPay: lossOfPay,
+        totalSalary: finalSalary,
         month: targetMonth + 1,
         year: targetYear
       });
