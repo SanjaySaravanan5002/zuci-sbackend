@@ -6,6 +6,184 @@ const User = require('../models/User');
 const Expense = require('../models/Expense');
 const { auth, authorize } = require('../middleware/auth');
 
+// Revenue and Income Reports - For superadmin and admin users
+router.get('/revenue_and_income', auth, authorize('superadmin', 'admin'), async (req, res) => {
+  try {
+    const { startDate, endDate, washType, area, customerType } = req.query;
+    const matchConditions = { status: 'Converted' };
+
+    if (startDate && endDate) {
+      matchConditions.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+
+    if (customerType) {
+      matchConditions.leadType = customerType;
+    }
+
+    const leads = await Lead.find(matchConditions)
+      .select('washHistory leadType customerName area phone monthlySubscription')
+      .populate({
+        path: 'washHistory.washer',
+        select: 'name'
+      })
+      .populate({
+        path: 'monthlySubscription.scheduledWashes.washer',
+        select: 'name'
+      })
+      .lean();
+
+    let totalRevenue = 0;
+    let totalWashes = 0;
+    let totalCustomers = leads.length;
+    let revenueByWashType = {};
+    let washesByType = {};
+    let revenueByCustomerType = {};
+    let customersByType = {};
+    let recentTransactions = [];
+    let paymentSummary = { total: 0, paid: 0, unpaid: 0 };
+
+    // Count customers by type
+    leads.forEach(lead => {
+      const type = lead.leadType || 'Unknown';
+      customersByType[type] = (customersByType[type] || 0) + 1;
+    });
+
+    // Process wash history
+    leads.forEach(lead => {
+      if (Array.isArray(lead.washHistory)) {
+        lead.washHistory.forEach(wash => {
+          if (wash.washStatus === 'completed') {
+            const amount = parseFloat(wash.amount) || 0;
+            const washTypeFilter = washType ? wash.washType === washType : true;
+            const areaFilter = area ? lead.area === area : true;
+            
+            if (washTypeFilter && areaFilter) {
+              totalRevenue += amount;
+              totalWashes++;
+              
+              // Revenue by wash type
+              if (wash.washType) {
+                revenueByWashType[wash.washType] = (revenueByWashType[wash.washType] || 0) + amount;
+                washesByType[wash.washType] = (washesByType[wash.washType] || 0) + 1;
+              }
+              
+              // Revenue by customer type
+              const customerType = lead.leadType || 'Unknown';
+              revenueByCustomerType[customerType] = (revenueByCustomerType[customerType] || 0) + amount;
+              
+              // Payment summary
+              paymentSummary.total += amount;
+              if (wash.is_amountPaid) {
+                paymentSummary.paid += amount;
+              } else {
+                paymentSummary.unpaid += amount;
+              }
+              
+              // Recent transactions
+              recentTransactions.push({
+                transactionId: `${lead._id}_${wash._id || Date.now()}`,
+                customerId: lead._id,
+                customerName: lead.customerName || 'Unknown Customer',
+                area: lead.area || 'Unknown Area',
+                washType: wash.washType || 'Standard',
+                amount: amount,
+                date: wash.date || new Date(),
+                washerName: wash.washer?.name || 'Unassigned',
+                customerType: lead.leadType || 'One-time',
+                isPaid: wash.is_amountPaid || false
+              });
+            }
+          }
+        });
+      }
+      
+      // Process monthly subscription washes
+      if (lead.monthlySubscription && lead.monthlySubscription.scheduledWashes) {
+        lead.monthlySubscription.scheduledWashes.forEach(wash => {
+          if (wash.status === 'completed') {
+            const amount = parseFloat(wash.amount) || 0;
+            const washTypeFilter = washType ? lead.monthlySubscription.packageType === washType : true;
+            const areaFilter = area ? lead.area === area : true;
+            
+            if (washTypeFilter && areaFilter) {
+              totalRevenue += amount;
+              totalWashes++;
+              
+              // Revenue by wash type
+              const packageType = lead.monthlySubscription.packageType || 'Standard';
+              revenueByWashType[packageType] = (revenueByWashType[packageType] || 0) + amount;
+              washesByType[packageType] = (washesByType[packageType] || 0) + 1;
+              
+              // Revenue by customer type
+              const customerType = lead.leadType || 'Unknown';
+              revenueByCustomerType[customerType] = (revenueByCustomerType[customerType] || 0) + amount;
+              
+              // Payment summary
+              paymentSummary.total += amount;
+              if (wash.is_amountPaid) {
+                paymentSummary.paid += amount;
+              } else {
+                paymentSummary.unpaid += amount;
+              }
+              
+              // Recent transactions
+              recentTransactions.push({
+                transactionId: `${lead._id}_monthly_${wash._id || Date.now()}`,
+                customerId: lead._id,
+                customerName: lead.customerName || 'Unknown Customer',
+                area: lead.area || 'Unknown Area',
+                washType: packageType,
+                amount: amount,
+                date: wash.completedDate || wash.scheduledDate || new Date(),
+                washerName: wash.washer?.name || 'Unassigned',
+                customerType: lead.leadType || 'Monthly',
+                isPaid: wash.is_amountPaid || false
+              });
+            }
+          }
+        });
+      }
+    });
+
+    // Get expenses for the same period
+    let expenseMatchConditions = {};
+    if (startDate && endDate) {
+      expenseMatchConditions.date = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+
+    const expenses = await Expense.find(expenseMatchConditions).lean();
+    const totalExpenses = expenses.reduce((sum, expense) => sum + (parseFloat(expense.amount) || 0), 0);
+    const netRevenue = totalRevenue - totalExpenses;
+
+    // Sort transactions by date (newest first)
+    recentTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.json({
+      totalRevenue: totalRevenue || 0,
+      netRevenue: netRevenue || 0,
+      totalExpenses: totalExpenses || 0,
+      totalWashes: totalWashes || 0,
+      totalCustomers: totalCustomers || 0,
+      revenueByWashType: revenueByWashType || {},
+      washesByType: washesByType || {},
+      revenueByCustomerType: revenueByCustomerType || {},
+      customersByType: customersByType || {},
+      recentTransactions: recentTransactions || [],
+      paymentSummary: paymentSummary || { total: 0, paid: 0, unpaid: 0 },
+      expenses: expenses || [],
+      message: 'Revenue and income data retrieved successfully'
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Financial Reports - For superadmin and admin users
 router.get('/revenue', auth, authorize('superadmin', 'admin'), async (req, res) => {
   try {
@@ -183,8 +361,9 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
 
     // Get wash history data
     const washHistoryData = await Lead.aggregate([
-      { $unwind: '$washHistory' },
+      { $unwind: { path: '$washHistory', preserveNullAndEmptyArrays: false } },
       { $match: washHistoryMatch },
+      { $match: { 'washHistory.washer': { $ne: null } } }, // Only include washes with assigned washers
       {
         $group: {
           _id: '$washHistory.washer',
@@ -208,8 +387,9 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
     // Get monthly subscription data
     const monthlyData = await Lead.aggregate([
       { $match: { leadType: 'Monthly', 'monthlySubscription.scheduledWashes': { $exists: true } } },
-      { $unwind: '$monthlySubscription.scheduledWashes' },
+      { $unwind: { path: '$monthlySubscription.scheduledWashes', preserveNullAndEmptyArrays: false } },
       { $match: monthlyMatch },
+      { $match: { 'monthlySubscription.scheduledWashes.washer': { $ne: null } } }, // Only include washes with assigned washers
       {
         $group: {
           _id: '$monthlySubscription.scheduledWashes.washer',
@@ -263,8 +443,10 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
 
     // Convert to array and add washer details
     const washers = await Promise.all(
-      Array.from(combinedData.values()).map(async (washer) => {
-        const washerDetails = await User.findById(washer._id);
+      Array.from(combinedData.values())
+        .filter(washer => washer._id) // Filter out null washer IDs
+        .map(async (washer) => {
+          const washerDetails = await User.findById(washer._id);
         
         // Get monthly wash count
         const monthlyWashCount = await Lead.aggregate([
@@ -359,24 +541,37 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
           completionRate: washer.totalWashes > 0 ? Math.round((washer.totalWashes / washer.totalWashes) * 100) : 100
         };
 
-        return {
-          _id: washer._id,
-          totalWashes: washer.totalWashes,
-          totalRevenue: washer.totalRevenue,
-          completedWashes: washer.completedWashes,
-          washerName: washerDetails?.name || 'Unknown Washer',
-          washerPhone: washerDetails?.phone || 'N/A',
-          washerEmail: washerDetails?.email || 'N/A',
-          washerStatus: washerDetails?.status || 'Unknown',
-          monthlyWashCount,
-          customerDetails,
-          attendance,
-          performance
-        };
-      })
+          return {
+            _id: washer._id,
+            totalWashes: washer.totalWashes || 0,
+            totalRevenue: washer.totalRevenue || 0,
+            completedWashes: washer.completedWashes || [],
+            washerName: washerDetails?.name || 'Unknown Washer',
+            washerPhone: washerDetails?.phone || 'N/A',
+            washerEmail: washerDetails?.email || 'N/A',
+            washerStatus: washerDetails?.status || 'Unknown',
+            monthlyWashCount: monthlyWashCount || [],
+            customerDetails: customerDetails || [],
+            attendance,
+            performance
+          };
+        })
     );
 
-    res.json(washers);
+    // Add fallback for when no washers are found
+    if (washers.length === 0) {
+      return res.json({
+        message: 'No washer data found for the specified criteria',
+        washers: [],
+        totalWashers: 0
+      });
+    }
+
+    res.json({
+      washers,
+      totalWashers: washers.length,
+      message: 'Washer reports retrieved successfully'
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
