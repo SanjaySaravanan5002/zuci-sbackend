@@ -14,7 +14,9 @@ router.get('/', auth, authorize('admin', 'superadmin'), async (req, res) => {
       leadSource,
       status,
       startDate,
-      endDate
+      endDate,
+      location,
+      plan
     } = req.query;
 
     // Build filter object
@@ -29,7 +31,7 @@ router.get('/', auth, authorize('admin', 'superadmin'), async (req, res) => {
       ];
     }
 
-    // Lead type filter
+    // Lead type filter (One-time customer filter)
     if (leadType) {
       filter.leadType = leadType;
     }
@@ -42,6 +44,20 @@ router.get('/', auth, authorize('admin', 'superadmin'), async (req, res) => {
     // Status filter
     if (status) {
       filter.status = status;
+    }
+
+    // Location-wise filter
+    if (location) {
+      filter.area = { $regex: location, $options: 'i' };
+    }
+
+    // Plan-wise filter
+    if (plan) {
+      filter.$or = [
+        { 'monthlySubscription.packageType': { $regex: plan, $options: 'i' } },
+        { 'monthlySubscription.customPlanName': { $regex: plan, $options: 'i' } },
+        { 'oneTimeWash.washType': { $regex: plan, $options: 'i' } }
+      ];
     }
 
     // Date range filter
@@ -306,6 +322,85 @@ router.get('/upcoming-washes', auth, authorize('admin', 'superadmin'), async (re
     res.json(upcomingWashes);
   } catch (error) {
     console.error('Error fetching upcoming washes:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Generate customer bill
+router.get('/:id/bill', auth, authorize('admin', 'superadmin'), async (req, res) => {
+  try {
+    const lead = await Lead.findOne({ id: parseInt(req.params.id) })
+      .populate('assignedWasher', 'name')
+      .populate('washHistory.washer', 'name');
+    
+    if (!lead) {
+      return res.status(404).json({ message: 'Customer not found' });
+    }
+
+    let billData = {
+      customerId: lead.id,
+      customerName: lead.customerName,
+      phone: lead.phone,
+      area: lead.area,
+      carModel: lead.carModel,
+      leadType: lead.leadType,
+      billDate: new Date(),
+      items: [],
+      totalAmount: 0,
+      paidAmount: 0,
+      pendingAmount: 0
+    };
+
+    if (lead.leadType === 'Monthly' && lead.monthlySubscription) {
+      // Monthly customer bill
+      const subscription = lead.monthlySubscription;
+      billData.subscriptionDetails = {
+        packageType: subscription.packageType,
+        customPlanName: subscription.customPlanName,
+        totalWashes: subscription.totalWashes,
+        completedWashes: subscription.completedWashes,
+        monthlyPrice: subscription.monthlyPrice,
+        startDate: subscription.startDate,
+        endDate: subscription.endDate
+      };
+
+      // Add completed washes to bill
+      subscription.scheduledWashes.forEach(wash => {
+        if (wash.status === 'completed') {
+          billData.items.push({
+            description: `${subscription.packageType} Wash - ${wash.washServiceType}`,
+            date: wash.completedDate,
+            amount: wash.amount,
+            isPaid: wash.is_amountPaid
+          });
+          billData.totalAmount += wash.amount;
+          if (wash.is_amountPaid) {
+            billData.paidAmount += wash.amount;
+          }
+        }
+      });
+    } else {
+      // One-time customer bill
+      lead.washHistory.forEach(wash => {
+        if (wash.washStatus === 'completed') {
+          billData.items.push({
+            description: `${wash.washType} Wash - ${wash.washServiceType}`,
+            date: wash.date,
+            amount: wash.amount,
+            isPaid: wash.is_amountPaid
+          });
+          billData.totalAmount += wash.amount;
+          if (wash.is_amountPaid) {
+            billData.paidAmount += wash.amount;
+          }
+        }
+      });
+    }
+
+    billData.pendingAmount = billData.totalAmount - billData.paidAmount;
+
+    res.json(billData);
+  } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
@@ -715,7 +810,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // Delete lead
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', auth, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     let lead;
     
@@ -733,7 +828,7 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Lead not found' });
     }
     
-    res.json({ message: 'Lead deleted successfully' });
+    res.json({ message: 'Customer deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -1451,8 +1546,57 @@ router.get('/:id/monthly-subscription', async (req, res) => {
   }
 });
 
+// Get monthly report for customers
+router.get('/reports/monthly-customers', auth, authorize('admin', 'superadmin'), async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    const currentDate = new Date();
+    const targetMonth = month ? parseInt(month) - 1 : currentDate.getMonth();
+    const targetYear = year ? parseInt(year) : currentDate.getFullYear();
+    
+    const startDate = new Date(targetYear, targetMonth, 1);
+    const endDate = new Date(targetYear, targetMonth + 1, 0);
+
+    const monthlyReport = await Lead.aggregate([
+      {
+        $match: {
+          status: 'Converted',
+          createdAt: {
+            $gte: startDate,
+            $lte: endDate
+          }
+        }
+      },
+      {
+        $group: {
+          _id: '$leadType',
+          customers: {
+            $push: {
+              id: '$id',
+              name: '$customerName',
+              phone: '$phone',
+              area: '$area',
+              totalWashes: { $size: '$washHistory' },
+              createdAt: '$createdAt'
+            }
+          },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    res.json({
+      month: targetMonth + 1,
+      year: targetYear,
+      report: monthlyReport
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Mark scheduled wash as completed (Washers can only update status, payment, and feedback)
-router.put('/:id/monthly-subscription/wash/:washId', async (req, res) => {
+router.put('/:id/monthly-subscription/wash/:washId', auth, async (req, res) => {
   try {
     const { status, feedback, washerId, amountPaid, washServiceType } = req.body;
     console.log('Updating wash:', { leadId: req.params.id, washId: req.params.washId, body: req.body });
