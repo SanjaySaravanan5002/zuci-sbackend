@@ -48,7 +48,7 @@ router.post('/login', async (req, res) => {
       role: user.role
     };
     
-    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '2d' });
+    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     console.log('Token generated successfully for user:', email);
 
