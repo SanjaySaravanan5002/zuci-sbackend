@@ -13,13 +13,17 @@ router.get('/revenue_and_income', auth, authorize('superadmin', 'admin'), async 
     const matchConditions = { status: 'Converted' };
 
     if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      
       matchConditions.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
+        $gte: start,
+        $lte: end
       };
     }
 
-    if (customerType) {
+    if (customerType && customerType !== 'All Types') {
       matchConditions.leadType = customerType;
     }
 
@@ -57,10 +61,12 @@ router.get('/revenue_and_income', auth, authorize('superadmin', 'admin'), async 
         lead.washHistory.forEach(wash => {
           if (wash.washStatus === 'completed') {
             const amount = parseFloat(wash.amount) || 0;
-            const washTypeFilter = washType ? wash.washType === washType : true;
+            const washTypeFilter = washType && washType !== 'All Types' ? wash.washType === washType : true;
             const areaFilter = area ? lead.area === area : true;
+            const dateFilter = startDate && endDate ? 
+              new Date(wash.date) >= new Date(startDate) && new Date(wash.date) <= new Date(endDate) : true;
             
-            if (washTypeFilter && areaFilter) {
+            if (washTypeFilter && areaFilter && dateFilter) {
               totalRevenue += amount;
               totalWashes++;
               
@@ -105,10 +111,13 @@ router.get('/revenue_and_income', auth, authorize('superadmin', 'admin'), async 
         lead.monthlySubscription.scheduledWashes.forEach(wash => {
           if (wash.status === 'completed') {
             const amount = parseFloat(wash.amount) || 0;
-            const washTypeFilter = washType ? lead.monthlySubscription.packageType === washType : true;
+            const washTypeFilter = washType && washType !== 'All Types' ? lead.monthlySubscription.packageType === washType : true;
             const areaFilter = area ? lead.area === area : true;
+            const dateFilter = startDate && endDate ? 
+              new Date(wash.completedDate || wash.scheduledDate) >= new Date(startDate) && 
+              new Date(wash.completedDate || wash.scheduledDate) <= new Date(endDate) : true;
             
-            if (washTypeFilter && areaFilter) {
+            if (washTypeFilter && areaFilter && dateFilter) {
               totalRevenue += amount;
               totalWashes++;
               
