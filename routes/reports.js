@@ -63,13 +63,18 @@ router.get('/revenue', auth, authorize('superadmin', 'admin'), async (req, res) 
 // Customer Reports - Available to all admin types
 router.get('/customers', auth, authorize('superadmin', 'admin', 'limited_admin'), async (req, res) => {
   try {
-    const { startDate, endDate, type } = req.query;
+    const { startDate, endDate, type, monthly } = req.query;
     const matchConditions = { status: 'Converted' };
 
+    // Date filter - fix to work properly
     if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999); // Include the entire end date
+      
       matchConditions.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
+        $gte: start,
+        $lte: end
       };
     }
 
@@ -77,24 +82,58 @@ router.get('/customers', auth, authorize('superadmin', 'admin', 'limited_admin')
       matchConditions.leadType = type;
     }
 
-    const customers = await Lead.aggregate([
-      { $match: matchConditions },
-      {
-        $group: {
-          _id: '$leadType',
-          count: { $sum: 1 },
-          customers: {
-            $push: {
-              name: '$customerName',
-              area: '$area',
-              phone: '$phone',
-              totalWashes: { $size: '$washHistory' }
+    let aggregationPipeline = [
+      { $match: matchConditions }
+    ];
+
+    if (monthly === 'true') {
+      // Monthly-wise report
+      aggregationPipeline.push(
+        {
+          $group: {
+            _id: {
+              year: { $year: '$createdAt' },
+              month: { $month: '$createdAt' },
+              leadType: '$leadType'
+            },
+            count: { $sum: 1 },
+            customers: {
+              $push: {
+                name: '$customerName',
+                area: '$area',
+                phone: '$phone',
+                totalWashes: { $size: '$washHistory' },
+                createdAt: '$createdAt'
+              }
+            }
+          }
+        },
+        {
+          $sort: { '_id.year': -1, '_id.month': -1 }
+        }
+      );
+    } else {
+      // Regular report
+      aggregationPipeline.push(
+        {
+          $group: {
+            _id: '$leadType',
+            count: { $sum: 1 },
+            customers: {
+              $push: {
+                name: '$customerName',
+                area: '$area',
+                phone: '$phone',
+                totalWashes: { $size: '$washHistory' },
+                createdAt: '$createdAt'
+              }
             }
           }
         }
-      }
-    ]);
+      );
+    }
 
+    const customers = await Lead.aggregate(aggregationPipeline);
     res.json(customers);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -104,21 +143,25 @@ router.get('/customers', auth, authorize('superadmin', 'admin', 'limited_admin')
 // Washer Reports - Available to all admin types
 router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), async (req, res) => {
   try {
-    const { startDate, endDate, washerId } = req.query;
+    const { startDate, endDate, washerId, monthly } = req.query;
     let dateFilter = {};
     let monthlyDateFilter = {};
 
     if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      
       dateFilter = {
         'washHistory.date': {
-          $gte: new Date(startDate),
-          $lte: new Date(endDate)
+          $gte: start,
+          $lte: end
         }
       };
       monthlyDateFilter = {
         'monthlySubscription.scheduledWashes.completedDate': {
-          $gte: new Date(startDate),
-          $lte: new Date(endDate)
+          $gte: start,
+          $lte: end
         }
       };
     }
@@ -254,6 +297,77 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
         };
       })
     );
+
+    // Add monthly wash count and performance data if requested
+    if (monthly === 'true') {
+      for (let washer of washers) {
+        // Get monthly wash count
+        const monthlyWashCount = await Lead.aggregate([
+          { $unwind: '$washHistory' },
+          {
+            $match: {
+              'washHistory.washer': washer._id,
+              'washHistory.washStatus': 'completed',
+              ...dateFilter
+            }
+          },
+          {
+            $group: {
+              _id: {
+                year: { $year: '$washHistory.date' },
+                month: { $month: '$washHistory.date' }
+              },
+              count: { $sum: 1 },
+              revenue: { $sum: '$washHistory.amount' }
+            }
+          },
+          { $sort: { '_id.year': -1, '_id.month': -1 } }
+        ]);
+
+        // Get customer details with dates
+        const customerDetails = await Lead.aggregate([
+          { $unwind: '$washHistory' },
+          {
+            $match: {
+              'washHistory.washer': washer._id,
+              'washHistory.washStatus': 'completed',
+              ...dateFilter
+            }
+          },
+          {
+            $group: {
+              _id: '$_id',
+              customerName: { $first: '$customerName' },
+              area: { $first: '$area' },
+              phone: { $first: '$phone' },
+              washDates: { $push: '$washHistory.date' },
+              totalAmount: { $sum: '$washHistory.amount' }
+            }
+          }
+        ]);
+
+        // Get attendance data
+        const washerUser = await User.findById(washer._id);
+        const attendanceData = washerUser?.attendance?.filter(att => {
+          if (!startDate || !endDate) return true;
+          const attDate = new Date(att.date);
+          return attDate >= new Date(startDate) && attDate <= new Date(endDate);
+        }) || [];
+
+        washer.monthlyWashCount = monthlyWashCount;
+        washer.customerDetails = customerDetails;
+        washer.attendance = {
+          totalDays: attendanceData.length,
+          presentDays: attendanceData.filter(att => att.status === 'present').length,
+          percentage: attendanceData.length > 0 ? 
+            ((attendanceData.filter(att => att.status === 'present').length / attendanceData.length) * 100).toFixed(1) : '0'
+        };
+        washer.performance = {
+          avgWashesPerDay: washer.attendance.presentDays > 0 ? (washer.totalWashes / washer.attendance.presentDays).toFixed(1) : '0',
+          avgRevenuePerWash: washer.totalWashes > 0 ? (washer.totalRevenue / washer.totalWashes).toFixed(0) : '0'
+        };
+      }
+    }
 
     // Sort by total revenue
     washers.sort((a, b) => b.totalRevenue - a.totalRevenue);
@@ -565,10 +679,69 @@ router.get('/revenue_and_income', auth, authorize('superadmin', 'admin'), async 
         paid: finalTotals.paidAmount || 0,
         unpaid: finalTotals.unpaidAmount || 0
       },
-      expenses: expenses || []
+      expenses: expenses || [],
+      dateRange: {
+        startDate: startDate || null,
+        endDate: endDate || null
+      }
     });
   } catch (error) {
     console.error('Error fetching revenue stats:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get attendance data for washers
+router.get('/attendance', auth, authorize('superadmin', 'admin', 'limited_admin'), async (req, res) => {
+  try {
+    const { startDate, endDate, washerId } = req.query;
+    
+    let washerQuery = { role: 'washer', status: 'Active' };
+    if (washerId) {
+      washerQuery._id = washerId;
+    }
+    
+    const washers = await User.find(washerQuery);
+    const attendanceReport = [];
+
+    for (const washer of washers) {
+      let attendanceData = washer.attendance || [];
+      
+      // Filter by date range if provided
+      if (startDate && endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        
+        attendanceData = attendanceData.filter(att => {
+          const attDate = new Date(att.date);
+          return attDate >= start && attDate <= end;
+        });
+      }
+
+      const presentDays = attendanceData.filter(att => att.status === 'present').length;
+      const totalDays = attendanceData.length;
+      const attendancePercentage = totalDays > 0 ? ((presentDays / totalDays) * 100).toFixed(1) : '0';
+
+      attendanceReport.push({
+        washerId: washer._id,
+        washerName: washer.name,
+        phone: washer.phone,
+        presentDays,
+        totalDays,
+        attendancePercentage,
+        attendanceRecords: attendanceData.map(att => ({
+          date: att.date,
+          timeIn: att.timeIn,
+          timeOut: att.timeOut,
+          duration: att.duration,
+          status: att.status
+        }))
+      });
+    }
+
+    res.json(attendanceReport);
+  } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
