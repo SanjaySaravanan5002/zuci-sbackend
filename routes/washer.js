@@ -811,6 +811,131 @@ router.get('/:id/wash-details', async (req, res) => {
   }
 });
 
+// Update washer details (Edit functionality)
+router.put('/:id', async (req, res) => {
+  try {
+    const { name, email, phone, address, salary } = req.body;
+    const washer = await User.findOne({ id: parseInt(req.params.id) });
+
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+
+    // Update basic details
+    if (name) washer.name = name;
+    if (email) washer.email = email;
+    if (phone) washer.phone = phone;
+    if (address) washer.address = address;
+    if (salary) {
+      washer.salary = {
+        base: salary.base || 0,
+        bonus: salary.bonus || 0
+      };
+    }
+
+    await washer.save();
+    res.json({ message: 'Washer updated successfully', washer });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Delete washer
+router.delete('/:id', async (req, res) => {
+  try {
+    const washer = await User.findOneAndDelete({ id: parseInt(req.params.id) });
+    
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+    
+    res.json({ message: 'Washer deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Upload photos for washer
+router.post('/:id/upload-photos', upload.fields([
+  { name: 'aadharImage', maxCount: 1 },
+  { name: 'drivingLicenseImage', maxCount: 1 },
+  { name: 'profilePhoto', maxCount: 1 }
+]), async (req, res) => {
+  try {
+    const washer = await User.findOne({ id: parseInt(req.params.id) });
+
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+
+    // Update images if provided
+    if (req.files) {
+      if (req.files.aadharImage) {
+        const aadharFile = req.files.aadharImage[0];
+        washer.aadharImage = {
+          data: aadharFile.buffer.toString('base64'),
+          contentType: aadharFile.mimetype
+        };
+      }
+      
+      if (req.files.drivingLicenseImage) {
+        const licenseFile = req.files.drivingLicenseImage[0];
+        washer.drivingLicenseImage = {
+          data: licenseFile.buffer.toString('base64'),
+          contentType: licenseFile.mimetype
+        };
+      }
+
+      if (req.files.profilePhoto) {
+        const profileFile = req.files.profilePhoto[0];
+        washer.profilePhoto = {
+          data: profileFile.buffer.toString('base64'),
+          contentType: profileFile.mimetype
+        };
+      }
+    }
+
+    await washer.save();
+    res.json({ message: 'Photos uploaded successfully', washer });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Update attendance (Edit Present/Absent)
+router.put('/:id/attendance/:attendanceId', async (req, res) => {
+  try {
+    const { status, timeIn, timeOut } = req.body;
+    const washer = await User.findOne({ id: parseInt(req.params.id) });
+
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+
+    const attendance = washer.attendance.id(req.params.attendanceId);
+    if (!attendance) {
+      return res.status(404).json({ message: 'Attendance record not found' });
+    }
+
+    // Update attendance status
+    if (status) attendance.status = status;
+    if (timeIn) attendance.timeIn = new Date(timeIn);
+    if (timeOut) {
+      attendance.timeOut = new Date(timeOut);
+      // Recalculate duration
+      if (attendance.timeIn) {
+        const duration = (new Date(timeOut) - attendance.timeIn) / (1000 * 60 * 60);
+        attendance.duration = parseFloat(duration.toFixed(2));
+      }
+    }
+
+    await washer.save();
+    res.json({ message: 'Attendance updated successfully', attendance });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Update washer personal details
 router.put('/:id/personal-details', upload.fields([
   { name: 'aadharImage', maxCount: 1 },
@@ -871,5 +996,97 @@ router.put('/:id/personal-details', upload.fields([
 });
 
 
+
+// Get washer performance details for dashboard
+router.get('/:id/performance', async (req, res) => {
+  try {
+    const washer = await User.findOne({ id: parseInt(req.params.id) });
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+
+    // Get performance data from leads
+    const leads = await Lead.find({
+      $or: [
+        { 'washHistory.washer': washer._id },
+        { 'monthlySubscription.scheduledWashes.washer': washer._id }
+      ]
+    });
+
+    let totalWashes = 0;
+    let completedWashes = 0;
+    let totalRevenue = 0;
+    let customerCount = new Set();
+
+    leads.forEach(lead => {
+      customerCount.add(lead._id.toString());
+      
+      // Count wash history
+      if (lead.washHistory) {
+        lead.washHistory.forEach(wash => {
+          if (wash.washer && wash.washer.toString() === washer._id.toString()) {
+            totalWashes++;
+            if (wash.washStatus === 'completed') {
+              completedWashes++;
+              if (wash.is_amountPaid) {
+                totalRevenue += wash.amount || 0;
+              }
+            }
+          }
+        });
+      }
+
+      // Count monthly subscription washes
+      if (lead.monthlySubscription && lead.monthlySubscription.scheduledWashes) {
+        lead.monthlySubscription.scheduledWashes.forEach(wash => {
+          if (wash.washer && wash.washer.toString() === washer._id.toString()) {
+            totalWashes++;
+            if (wash.status === 'completed') {
+              completedWashes++;
+              if (wash.is_amountPaid) {
+                totalRevenue += wash.amount || 0;
+              }
+            }
+          }
+        });
+      }
+    });
+
+    // Get attendance data for current month
+    const currentDate = new Date();
+    const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+    const endOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+    
+    const monthlyAttendance = washer.attendance?.filter(att => {
+      const attDate = new Date(att.date);
+      return attDate >= startOfMonth && attDate <= endOfMonth;
+    }) || [];
+
+    const presentDays = monthlyAttendance.filter(att => att.status === 'present').length;
+    const totalWorkingDays = endOfMonth.getDate();
+
+    res.json({
+      washerInfo: {
+        id: washer.id,
+        name: washer.name,
+        phone: washer.phone,
+        email: washer.email
+      },
+      performance: {
+        totalWashes,
+        completedWashes,
+        completionRate: totalWashes > 0 ? ((completedWashes / totalWashes) * 100).toFixed(1) : '0',
+        totalRevenue,
+        avgRevenuePerWash: completedWashes > 0 ? (totalRevenue / completedWashes).toFixed(0) : '0',
+        customerCount: customerCount.size,
+        presentDays,
+        totalWorkingDays,
+        attendancePercentage: totalWorkingDays > 0 ? ((presentDays / totalWorkingDays) * 100).toFixed(1) : '0'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
 
 module.exports = router;
