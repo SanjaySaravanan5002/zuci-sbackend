@@ -144,60 +144,47 @@ router.get('/customers', auth, authorize('superadmin', 'admin', 'limited_admin')
 router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), async (req, res) => {
   try {
     const { startDate, endDate, washerId, monthly } = req.query;
-    let dateFilter = {};
-    let monthlyDateFilter = {};
+    // Build match conditions
+    let washHistoryMatch = {
+      'washHistory.washStatus': 'completed',
+      'washHistory.is_amountPaid': true
+    };
+    
+    let monthlyMatch = {
+      'monthlySubscription.scheduledWashes.status': 'completed',
+      'monthlySubscription.scheduledWashes.is_amountPaid': true
+    };
 
     if (startDate && endDate) {
       const start = new Date(startDate);
       const end = new Date(endDate);
       end.setHours(23, 59, 59, 999);
       
-      dateFilter = {
-        'washHistory.date': {
-          $gte: start,
-          $lte: end
-        }
-      };
-      monthlyDateFilter = {
-        'monthlySubscription.scheduledWashes.completedDate': {
-          $gte: start,
-          $lte: end
-        }
-      };
+      washHistoryMatch['washHistory.date'] = { $gte: start, $lte: end };
+      monthlyMatch['monthlySubscription.scheduledWashes.completedDate'] = { $gte: start, $lte: end };
     }
 
-    let washerFilter = {};
-    let monthlyWasherFilter = {};
     if (washerId) {
-      // Handle both ObjectId and numeric ID
+      let washerObjectId;
       if (washerId.match(/^[0-9a-fA-F]{24}$/)) {
-        washerFilter = { 'washHistory.washer': new mongoose.Types.ObjectId(washerId) };
-        monthlyWasherFilter = { 'monthlySubscription.scheduledWashes.washer': new mongoose.Types.ObjectId(washerId) };
+        washerObjectId = new mongoose.Types.ObjectId(washerId);
       } else {
-        // Find user by numeric ID first
         const user = await User.findOne({ id: parseInt(washerId) });
         if (user) {
-          washerFilter = { 'washHistory.washer': user._id };
-          monthlyWasherFilter = { 'monthlySubscription.scheduledWashes.washer': user._id };
+          washerObjectId = user._id;
         }
       }
+      
+      if (washerObjectId) {
+        washHistoryMatch['washHistory.washer'] = washerObjectId;
+        monthlyMatch['monthlySubscription.scheduledWashes.washer'] = washerObjectId;
+      }
     }
-
-    // Update dateFilter for monthly subscriptions
-    Object.assign(dateFilter, monthlyDateFilter);
-    Object.assign(washerFilter, monthlyWasherFilter);
 
     // Get wash history data
     const washHistoryData = await Lead.aggregate([
       { $unwind: '$washHistory' },
-      {
-        $match: {
-          'washHistory.washStatus': 'completed',
-          'washHistory.is_amountPaid': true,
-          ...dateFilter,
-          ...washerFilter
-        }
-      },
+      { $match: washHistoryMatch },
       {
         $group: {
           _id: '$washHistory.washer',
@@ -222,14 +209,7 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
     const monthlyData = await Lead.aggregate([
       { $match: { leadType: 'Monthly', 'monthlySubscription.scheduledWashes': { $exists: true } } },
       { $unwind: '$monthlySubscription.scheduledWashes' },
-      {
-        $match: {
-          'monthlySubscription.scheduledWashes.status': 'completed',
-          'monthlySubscription.scheduledWashes.is_amountPaid': true,
-          ...dateFilter,
-          ...washerFilter
-        }
-      },
+      { $match: monthlyMatch },
       {
         $group: {
           _id: '$monthlySubscription.scheduledWashes.washer',
