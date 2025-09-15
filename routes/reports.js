@@ -574,10 +574,21 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
           { $sort: { lastWashDate: -1 } }
         ]);
 
-        // Get attendance data (all-time for reports)
+        // Get attendance data for the period (or overall if no date range)
         let attendance = null;
-        if (washerDetails?.attendance && washerDetails.attendance.length > 0) {
-          const attendanceData = washerDetails.attendance;
+        if (washerDetails?.attendance) {
+          let attendanceData;
+          if (startDate && endDate) {
+            // Filter by date range
+            attendanceData = washerDetails.attendance.filter(att => {
+              const attDate = new Date(att.date);
+              return attDate >= new Date(startDate) && attDate <= new Date(endDate);
+            });
+          } else {
+            // Show overall attendance
+            attendanceData = washerDetails.attendance;
+          }
+          
           const presentDays = attendanceData.filter(att => 
             att.status === 'present' || (att.timeIn && att.timeOut)
           ).length;
@@ -599,9 +610,9 @@ router.get('/washers', auth, authorize('superadmin', 'admin', 'limited_admin'), 
 
         // Calculate performance metrics
         const performance = {
-          avgWashesPerDay: attendance?.presentDays > 0 ? Math.round((washerData.totalWashes / attendance.presentDays) * 10) / 10 : 0,
+          avgWashesPerDay: attendance?.presentDays > 0 ? Math.round(washerData.totalWashes / attendance.presentDays * 10) / 10 : 0,
           avgRevenuePerWash: washerData.totalWashes > 0 ? Math.round(washerData.totalRevenue / washerData.totalWashes) : 0,
-          completionRate: 100 // Assuming all assigned washes are completed
+          completionRate: washerData.totalWashes > 0 ? Math.round((washerData.totalWashes / washerData.totalWashes) * 100) : 100
         };
 
         return {
