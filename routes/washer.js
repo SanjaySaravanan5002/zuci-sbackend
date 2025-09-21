@@ -957,6 +957,71 @@ router.put('/:id/attendance/:attendanceId', async (req, res) => {
   }
 });
 
+// Update attendance by specific date
+router.put('/:id/attendance/date/:date', async (req, res) => {
+  try {
+    const { status } = req.body;
+    const { date } = req.params;
+    
+    const washer = await User.findOne({ id: parseInt(req.params.id) });
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+
+    if (!washer.attendance) {
+      washer.attendance = [];
+    }
+
+    const targetDate = new Date(date);
+    targetDate.setHours(0, 0, 0, 0);
+    
+    const attendanceIndex = washer.attendance.findIndex(att => {
+      const attDate = new Date(att.date);
+      attDate.setHours(0, 0, 0, 0);
+      return attDate.getTime() === targetDate.getTime();
+    });
+
+    const timeIn = new Date(targetDate);
+    timeIn.setHours(9, 0, 0, 0); // 9 AM
+    
+    const timeOut = new Date(targetDate);
+    timeOut.setHours(18, 0, 0, 0); // 6 PM
+
+    if (attendanceIndex === -1) {
+      // Create new record
+      const newAttendance = {
+        date: targetDate,
+        status: status,
+        timeIn: timeIn,
+        timeOut: status === 'present' ? timeOut : undefined,
+        duration: status === 'present' ? 9 : 0
+      };
+      washer.attendance.push(newAttendance);
+    } else {
+      // Update existing record
+      washer.attendance[attendanceIndex].status = status;
+      washer.attendance[attendanceIndex].timeIn = timeIn;
+      
+      if (status === 'present') {
+        washer.attendance[attendanceIndex].timeOut = timeOut;
+        washer.attendance[attendanceIndex].duration = 9;
+      } else {
+        washer.attendance[attendanceIndex].timeOut = undefined;
+        washer.attendance[attendanceIndex].duration = 0;
+      }
+    }
+
+    await washer.save();
+    res.json({ 
+      message: `Attendance ${status} for ${targetDate.toLocaleDateString()}`,
+      success: true
+    });
+  } catch (error) {
+    console.error('Attendance update error:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Update washer personal details
 router.put('/:id/personal-details', upload.fields([
   { name: 'aadharImage', maxCount: 1 },
