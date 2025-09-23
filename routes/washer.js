@@ -1083,6 +1083,51 @@ router.put('/:id/personal-details', upload.fields([
 
 
 
+// Get washer salary information
+router.get('/:id/salary', async (req, res) => {
+  try {
+    const washer = await User.findOne({ id: parseInt(req.params.id) });
+    if (!washer) {
+      return res.status(404).json({ message: 'Washer not found' });
+    }
+
+    res.json({
+      success: true,
+      data: washer.salary || null
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Set/Update washer salary
+router.post('/:id/salary', async (req, res) => {
+  try {
+    const { baseSalary, effectiveDate } = req.body;
+    const washer = await User.findOne({ id: parseInt(req.params.id) });
+    
+    if (!washer) {
+      return res.status(404).json({ success: false, error: 'Washer not found' });
+    }
+
+    washer.salary = {
+      baseSalary: parseFloat(baseSalary),
+      effectiveDate: new Date(effectiveDate),
+      updatedAt: new Date()
+    };
+
+    await washer.save();
+    
+    res.json({
+      success: true,
+      message: 'Salary updated successfully',
+      data: washer.salary
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Get washer performance details for dashboard
 router.get('/:id/performance', async (req, res) => {
   try {
