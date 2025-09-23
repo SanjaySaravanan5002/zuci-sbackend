@@ -189,9 +189,8 @@ router.get('/salary-calculation', auth, authorize('superadmin', 'admin'), async 
       });
       const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
 
-      // Calculate salary with new logic
-      const baseSalary = washer.salary?.base || 0;
-      const bonus = washer.salary?.bonus || 0;
+      // Calculate salary with new logic using updated schema
+      const baseSalary = washer.salary?.baseSalary || 0;
       const washCount = completedWashes[0]?.totalWashes || 0;
       
       // Calculate loss of pay
@@ -200,10 +199,8 @@ router.get('/salary-calculation', auth, authorize('superadmin', 'admin'), async 
       const lossOfPay = absentDays * perDaySalary;
       const salaryAfterAttendance = baseSalary - lossOfPay;
       
-      // Final salary calculation
-      const bonusEarned = bonus * washCount;
-      const salaryWithBonus = salaryAfterAttendance + bonusEarned;
-      const finalSalary = Math.max(0, salaryWithBonus - totalExpenses);
+      // Final salary calculation (no bonus per wash in new structure)
+      const finalSalary = Math.max(0, salaryAfterAttendance - totalExpenses);
       
       const attendancePercentage = totalWorkingDays > 0 ? (presentDays / totalWorkingDays) * 100 : 0;
 
@@ -211,7 +208,7 @@ router.get('/salary-calculation', auth, authorize('superadmin', 'admin'), async 
         washerId: washer._id,
         washerName: washer.name,
         baseSalary,
-        bonus,
+        bonus: 0, // No bonus per wash in new structure
         washCount,
         presentDays,
         totalWorkingDays,
