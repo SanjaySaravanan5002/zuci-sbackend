@@ -73,13 +73,16 @@ const userSchema = new mongoose.Schema({
   },
   area: String,
   salary: {
-    base: {
+    baseSalary: {
       type: Number,
       default: 0
     },
-    bonus: {
-      type: Number,
-      default: 0
+    effectiveDate: {
+      type: Date
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now
     }
   },
   attendance: [attendanceSchema],
