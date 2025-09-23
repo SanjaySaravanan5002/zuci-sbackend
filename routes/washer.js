@@ -1086,9 +1086,16 @@ router.put('/:id/personal-details', upload.fields([
 // Get washer salary information
 router.get('/:id/salary', async (req, res) => {
   try {
-    const washer = await User.findOne({ id: parseInt(req.params.id) });
+    let washer;
+    // Try both numeric ID and MongoDB ObjectId
+    if (!isNaN(req.params.id)) {
+      washer = await User.findOne({ id: parseInt(req.params.id) });
+    } else if (req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+      washer = await User.findById(req.params.id);
+    }
+    
     if (!washer) {
-      return res.status(404).json({ message: 'Washer not found' });
+      return res.status(404).json({ success: false, error: 'Washer not found' });
     }
 
     res.json({
@@ -1104,7 +1111,13 @@ router.get('/:id/salary', async (req, res) => {
 router.post('/:id/salary', async (req, res) => {
   try {
     const { baseSalary, effectiveDate } = req.body;
-    const washer = await User.findOne({ id: parseInt(req.params.id) });
+    let washer;
+    // Try both numeric ID and MongoDB ObjectId
+    if (!isNaN(req.params.id)) {
+      washer = await User.findOne({ id: parseInt(req.params.id) });
+    } else if (req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+      washer = await User.findById(req.params.id);
+    }
     
     if (!washer) {
       return res.status(404).json({ success: false, error: 'Washer not found' });
