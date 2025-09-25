@@ -355,46 +355,76 @@ router.get('/:id/bill', auth, authorize('admin', 'superadmin'), async (req, res)
       // Monthly customer bill
       const subscription = lead.monthlySubscription;
       billData.subscriptionDetails = {
-        packageType: subscription.packageType,
+        packageType: subscription.packageType || subscription.customPlanName || '999',
         customPlanName: subscription.customPlanName,
-        totalWashes: subscription.totalWashes,
-        completedWashes: subscription.completedWashes,
-        monthlyPrice: subscription.monthlyPrice,
+        totalWashes: subscription.totalWashes || 4,
+        completedWashes: subscription.completedWashes || 0,
+        monthlyPrice: subscription.monthlyPrice || 0,
         startDate: subscription.startDate,
         endDate: subscription.endDate
       };
 
-      // Add completed washes to bill
-      subscription.scheduledWashes.forEach(wash => {
-        if (wash.status === 'completed') {
-          billData.items.push({
-            description: `${subscription.packageType} Wash - ${wash.washServiceType}`,
-            date: wash.completedDate,
-            amount: wash.amount,
-            isPaid: wash.is_amountPaid
-          });
-          billData.totalAmount += wash.amount;
-          if (wash.is_amountPaid) {
-            billData.paidAmount += wash.amount;
+      // Add completed washes from scheduledWashes
+      if (subscription.scheduledWashes && subscription.scheduledWashes.length > 0) {
+        subscription.scheduledWashes.forEach(wash => {
+          if (wash.status === 'completed') {
+            billData.items.push({
+              description: `${subscription.packageType || subscription.customPlanName} Wash - ${wash.washServiceType || 'Exterior'}`,
+              date: wash.completedDate || wash.scheduledDate,
+              amount: wash.amount || 0,
+              isPaid: wash.is_amountPaid || false
+            });
+            billData.totalAmount += (wash.amount || 0);
+            if (wash.is_amountPaid) {
+              billData.paidAmount += (wash.amount || 0);
+            }
           }
-        }
-      });
+        });
+      }
+      
+      // Also check wash history for completed washes
+      if (lead.washHistory && lead.washHistory.length > 0) {
+        lead.washHistory.forEach(wash => {
+          if (wash.washStatus === 'completed') {
+            // Avoid duplicates by checking if already added from scheduledWashes
+            const alreadyAdded = billData.items.some(item => 
+              new Date(item.date).toDateString() === new Date(wash.date).toDateString() &&
+              item.amount === wash.amount
+            );
+            
+            if (!alreadyAdded) {
+              billData.items.push({
+                description: `${wash.washType} Wash - ${wash.washServiceType || 'Exterior'}`,
+                date: wash.date,
+                amount: wash.amount || 0,
+                isPaid: wash.is_amountPaid || false
+              });
+              billData.totalAmount += (wash.amount || 0);
+              if (wash.is_amountPaid) {
+                billData.paidAmount += (wash.amount || 0);
+              }
+            }
+          }
+        });
+      }
     } else {
       // One-time customer bill
-      lead.washHistory.forEach(wash => {
-        if (wash.washStatus === 'completed') {
-          billData.items.push({
-            description: `${wash.washType} Wash - ${wash.washServiceType}`,
-            date: wash.date,
-            amount: wash.amount,
-            isPaid: wash.is_amountPaid
-          });
-          billData.totalAmount += wash.amount;
-          if (wash.is_amountPaid) {
-            billData.paidAmount += wash.amount;
+      if (lead.washHistory && lead.washHistory.length > 0) {
+        lead.washHistory.forEach(wash => {
+          if (wash.washStatus === 'completed') {
+            billData.items.push({
+              description: `${wash.washType} Wash - ${wash.washServiceType || 'Exterior'}`,
+              date: wash.date,
+              amount: wash.amount || 0,
+              isPaid: wash.is_amountPaid || false
+            });
+            billData.totalAmount += (wash.amount || 0);
+            if (wash.is_amountPaid) {
+              billData.paidAmount += (wash.amount || 0);
+            }
           }
-        }
-      });
+        });
+      }
     }
 
     billData.pendingAmount = billData.totalAmount - billData.paidAmount;
