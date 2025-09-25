@@ -351,6 +351,9 @@ router.get('/:id/bill', auth, authorize('admin', 'superadmin'), async (req, res)
       pendingAmount: 0
     };
 
+    // Collect ALL wash entries from all sources without merging or skipping
+    const allWashEntries = [];
+
     if (lead.leadType === 'Monthly' && lead.monthlySubscription) {
       // Monthly customer bill
       const subscription = lead.monthlySubscription;
@@ -364,68 +367,56 @@ router.get('/:id/bill', auth, authorize('admin', 'superadmin'), async (req, res)
         endDate: subscription.endDate
       };
 
-      // Add completed washes from scheduledWashes
+      // Add ALL completed washes from scheduledWashes (each as separate entry)
       if (subscription.scheduledWashes && subscription.scheduledWashes.length > 0) {
-        subscription.scheduledWashes.forEach(wash => {
+        subscription.scheduledWashes.forEach((wash, index) => {
           if (wash.status === 'completed') {
-            billData.items.push({
+            allWashEntries.push({
               description: `${subscription.packageType || subscription.customPlanName} Wash - ${wash.washServiceType || 'Exterior'}`,
               date: wash.completedDate || wash.scheduledDate,
+              time: wash.completedDate ? new Date(wash.completedDate).toLocaleTimeString('en-IN') : 'N/A',
+              vehicleNumber: lead.vehicleNumber || lead.carModel || 'N/A',
+              washType: subscription.packageType || subscription.customPlanName,
               amount: wash.amount || 0,
-              isPaid: wash.is_amountPaid || false
+              isPaid: wash.is_amountPaid || false,
+              source: 'scheduledWash',
+              entryId: `scheduled_${index}`
             });
-            billData.totalAmount += (wash.amount || 0);
-            if (wash.is_amountPaid) {
-              billData.paidAmount += (wash.amount || 0);
-            }
-          }
-        });
-      }
-      
-      // Also check wash history for completed washes
-      if (lead.washHistory && lead.washHistory.length > 0) {
-        lead.washHistory.forEach(wash => {
-          if (wash.washStatus === 'completed') {
-            // Avoid duplicates by checking if already added from scheduledWashes
-            const alreadyAdded = billData.items.some(item => 
-              new Date(item.date).toDateString() === new Date(wash.date).toDateString() &&
-              item.amount === wash.amount
-            );
-            
-            if (!alreadyAdded) {
-              billData.items.push({
-                description: `${wash.washType} Wash - ${wash.washServiceType || 'Exterior'}`,
-                date: wash.date,
-                amount: wash.amount || 0,
-                isPaid: wash.is_amountPaid || false
-              });
-              billData.totalAmount += (wash.amount || 0);
-              if (wash.is_amountPaid) {
-                billData.paidAmount += (wash.amount || 0);
-              }
-            }
-          }
-        });
-      }
-    } else {
-      // One-time customer bill
-      if (lead.washHistory && lead.washHistory.length > 0) {
-        lead.washHistory.forEach(wash => {
-          if (wash.washStatus === 'completed') {
-            billData.items.push({
-              description: `${wash.washType} Wash - ${wash.washServiceType || 'Exterior'}`,
-              date: wash.date,
-              amount: wash.amount || 0,
-              isPaid: wash.is_amountPaid || false
-            });
-            billData.totalAmount += (wash.amount || 0);
-            if (wash.is_amountPaid) {
-              billData.paidAmount += (wash.amount || 0);
-            }
           }
         });
       }
     }
+    
+    // Add ALL completed washes from washHistory (each as separate entry)
+    if (lead.washHistory && lead.washHistory.length > 0) {
+      lead.washHistory.forEach((wash, index) => {
+        if (wash.washStatus === 'completed') {
+          allWashEntries.push({
+            description: `${wash.washType} Wash - ${wash.washServiceType || 'Exterior'}`,
+            date: wash.date,
+            time: new Date(wash.date).toLocaleTimeString('en-IN'),
+            vehicleNumber: lead.vehicleNumber || lead.carModel || 'N/A',
+            washType: wash.washType,
+            amount: wash.amount || 0,
+            isPaid: wash.is_amountPaid || false,
+            source: 'washHistory',
+            entryId: `history_${index}`
+          });
+        }
+      });
+    }
+
+    // Sort all entries by date (newest first) and add to bill items
+    allWashEntries.sort((a, b) => new Date(b.date) - new Date(a.date));
+    
+    // Add each entry as separate line item
+    allWashEntries.forEach(entry => {
+      billData.items.push(entry);
+      billData.totalAmount += entry.amount;
+      if (entry.isPaid) {
+        billData.paidAmount += entry.amount;
+      }
+    });
 
     billData.pendingAmount = billData.totalAmount - billData.paidAmount;
 
