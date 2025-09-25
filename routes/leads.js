@@ -351,7 +351,7 @@ router.get('/:id/bill', auth, authorize('admin', 'superadmin'), async (req, res)
       pendingAmount: 0
     };
 
-    // Collect ALL wash entries from all sources without merging or skipping
+    // Use washHistory as the single source of truth for all wash records
     const allWashEntries = [];
 
     if (lead.leadType === 'Monthly' && lead.monthlySubscription) {
@@ -361,31 +361,14 @@ router.get('/:id/bill', auth, authorize('admin', 'superadmin'), async (req, res)
         packageType: subscription.packageType || subscription.customPlanName || '999',
         customPlanName: subscription.customPlanName,
         totalWashes: subscription.totalWashes || 4,
-        completedWashes: subscription.completedWashes || 0,
+        completedWashes: lead.washHistory ? lead.washHistory.filter(w => w.washStatus === 'completed').length : 0,
         monthlyPrice: subscription.monthlyPrice || 0,
         startDate: subscription.startDate,
         endDate: subscription.endDate
       };
-
-      // Add ALL scheduled washes (both completed and pending)
-      if (subscription.scheduledWashes && subscription.scheduledWashes.length > 0) {
-        subscription.scheduledWashes.forEach((wash, index) => {
-          allWashEntries.push({
-            description: `${subscription.packageType || subscription.customPlanName} Wash - ${wash.washServiceType || 'Exterior'}`,
-            date: wash.completedDate || wash.scheduledDate,
-            time: wash.completedDate ? new Date(wash.completedDate).toLocaleTimeString('en-IN') : '12:00:00 am',
-            vehicleNumber: lead.vehicleNumber || lead.carModel || 'N/A',
-            washType: subscription.packageType || subscription.customPlanName,
-            amount: wash.amount || 0,
-            isPaid: wash.is_amountPaid || false,
-            source: 'scheduledWash',
-            entryId: `scheduled_${index}`
-          });
-        });
-      }
     }
     
-    // Add ALL washes from washHistory (both completed and pending)
+    // Add ALL washes from washHistory (this contains the actual wash records)
     if (lead.washHistory && lead.washHistory.length > 0) {
       lead.washHistory.forEach((wash, index) => {
         allWashEntries.push({
