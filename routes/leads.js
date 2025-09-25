@@ -367,42 +367,38 @@ router.get('/:id/bill', auth, authorize('admin', 'superadmin'), async (req, res)
         endDate: subscription.endDate
       };
 
-      // Add ALL completed washes from scheduledWashes (each as separate entry)
+      // Add ALL scheduled washes (both completed and pending)
       if (subscription.scheduledWashes && subscription.scheduledWashes.length > 0) {
         subscription.scheduledWashes.forEach((wash, index) => {
-          if (wash.status === 'completed') {
-            allWashEntries.push({
-              description: `${subscription.packageType || subscription.customPlanName} Wash - ${wash.washServiceType || 'Exterior'}`,
-              date: wash.completedDate || wash.scheduledDate,
-              time: wash.completedDate ? new Date(wash.completedDate).toLocaleTimeString('en-IN') : 'N/A',
-              vehicleNumber: lead.vehicleNumber || lead.carModel || 'N/A',
-              washType: subscription.packageType || subscription.customPlanName,
-              amount: wash.amount || 0,
-              isPaid: wash.is_amountPaid || false,
-              source: 'scheduledWash',
-              entryId: `scheduled_${index}`
-            });
-          }
+          allWashEntries.push({
+            description: `${subscription.packageType || subscription.customPlanName} Wash - ${wash.washServiceType || 'Exterior'}`,
+            date: wash.completedDate || wash.scheduledDate,
+            time: wash.completedDate ? new Date(wash.completedDate).toLocaleTimeString('en-IN') : '12:00:00 am',
+            vehicleNumber: lead.vehicleNumber || lead.carModel || 'N/A',
+            washType: subscription.packageType || subscription.customPlanName,
+            amount: wash.amount || 0,
+            isPaid: wash.is_amountPaid || false,
+            source: 'scheduledWash',
+            entryId: `scheduled_${index}`
+          });
         });
       }
     }
     
-    // Add ALL completed washes from washHistory (each as separate entry)
+    // Add ALL washes from washHistory (both completed and pending)
     if (lead.washHistory && lead.washHistory.length > 0) {
       lead.washHistory.forEach((wash, index) => {
-        if (wash.washStatus === 'completed') {
-          allWashEntries.push({
-            description: `${wash.washType} Wash - ${wash.washServiceType || 'Exterior'}`,
-            date: wash.date,
-            time: new Date(wash.date).toLocaleTimeString('en-IN'),
-            vehicleNumber: lead.vehicleNumber || lead.carModel || 'N/A',
-            washType: wash.washType,
-            amount: wash.amount || 0,
-            isPaid: wash.is_amountPaid || false,
-            source: 'washHistory',
-            entryId: `history_${index}`
-          });
-        }
+        allWashEntries.push({
+          description: `${wash.washType} Wash - ${wash.washServiceType || 'Exterior'}`,
+          date: wash.date,
+          time: new Date(wash.date).toLocaleTimeString('en-IN'),
+          vehicleNumber: lead.vehicleNumber || lead.carModel || 'N/A',
+          washType: wash.washType,
+          amount: wash.amount || 0,
+          isPaid: wash.is_amountPaid || false,
+          source: 'washHistory',
+          entryId: `history_${index}`
+        });
       });
     }
 
