@@ -124,6 +124,8 @@ router.get('/stats', auth, authorize('superadmin', 'admin'), async (req, res) =>
       endDate = dateRange.endDate;
     }
     
+    console.log('Dashboard stats - Date range:', { startDate, endDate });
+    
     const duration = endDate.getTime() - startDate.getTime();
     const prevStartDate = new Date(startDate.getTime() - duration);
     const prevEndDate = new Date(startDate);
@@ -167,22 +169,49 @@ router.get('/stats', auth, authorize('superadmin', 'admin'), async (req, res) =>
     
     const conversionRate = totalLeadsInPeriod > 0 ? ((convertedLeads / totalLeadsInPeriod) * 100).toFixed(1) : 0;
 
-    const income = leads.reduce((total, lead) => {
-      // Count only completed AND paid washes to match revenue report
-      const completedPaidWashes = lead.washHistory.filter(wash => 
-        wash.washStatus === 'completed' && wash.is_amountPaid === true
-      );
-      const washIncome = completedPaidWashes.reduce((washTotal, wash) => washTotal + (wash.amount || 0), 0);
-      
-      let subscriptionIncome = 0;
-      if (lead.monthlySubscription && lead.monthlySubscription.scheduledWashes) {
-        subscriptionIncome = lead.monthlySubscription.scheduledWashes
-          .filter(wash => wash.status === 'completed' && wash.is_amountPaid === true)
-          .reduce((subTotal, wash) => subTotal + (wash.amount || 0), 0);
+    // Calculate revenue using aggregation for better performance and accuracy
+    const revenueFromWashHistory = await Lead.aggregate([
+      { $unwind: '$washHistory' },
+      {
+        $match: {
+          'washHistory.washStatus': 'completed',
+          'washHistory.is_amountPaid': true,
+          'washHistory.date': { $gte: startDate, $lte: endDate }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$washHistory.amount' }
+        }
       }
-      
-      return total + washIncome + subscriptionIncome;
-    }, 0);
+    ]);
+    
+    const revenueFromSubscriptions = await Lead.aggregate([
+      { $unwind: '$monthlySubscription.scheduledWashes' },
+      {
+        $match: {
+          'monthlySubscription.scheduledWashes.status': 'completed',
+          'monthlySubscription.scheduledWashes.is_amountPaid': true,
+          'monthlySubscription.scheduledWashes.completedDate': { $gte: startDate, $lte: endDate }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$monthlySubscription.scheduledWashes.amount' }
+        }
+      }
+    ]);
+    
+    const income = (revenueFromWashHistory[0]?.totalRevenue || 0) + (revenueFromSubscriptions[0]?.totalRevenue || 0);
+    
+    console.log('Revenue calculation:', {
+      washHistoryRevenue: revenueFromWashHistory[0]?.totalRevenue || 0,
+      subscriptionRevenue: revenueFromSubscriptions[0]?.totalRevenue || 0,
+      totalIncome: income,
+      dateRange: { startDate, endDate }
+    });
 
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
@@ -198,21 +227,42 @@ router.get('/stats', auth, authorize('superadmin', 'admin'), async (req, res) =>
       createdAt: { $gte: prevStartDate, $lte: prevEndDate }
     });
 
-    const prevPeriodIncome = prevPeriodLeads.reduce((total, lead) => {
-      const completedPaidWashes = lead.washHistory.filter(wash => 
-        wash.washStatus === 'completed' && wash.is_amountPaid === true
-      );
-      const washIncome = completedPaidWashes.reduce((washTotal, wash) => washTotal + (wash.amount || 0), 0);
-      
-      let subscriptionIncome = 0;
-      if (lead.monthlySubscription && lead.monthlySubscription.scheduledWashes) {
-        subscriptionIncome = lead.monthlySubscription.scheduledWashes
-          .filter(wash => wash.status === 'completed' && wash.is_amountPaid === true)
-          .reduce((subTotal, wash) => subTotal + (wash.amount || 0), 0);
+    // Calculate previous period revenue using aggregation
+    const prevRevenueFromWashHistory = await Lead.aggregate([
+      { $unwind: '$washHistory' },
+      {
+        $match: {
+          'washHistory.washStatus': 'completed',
+          'washHistory.is_amountPaid': true,
+          'washHistory.date': { $gte: prevStartDate, $lt: startDate }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$washHistory.amount' }
+        }
       }
-      
-      return total + washIncome + subscriptionIncome;
-    }, 0);
+    ]);
+    
+    const prevRevenueFromSubscriptions = await Lead.aggregate([
+      { $unwind: '$monthlySubscription.scheduledWashes' },
+      {
+        $match: {
+          'monthlySubscription.scheduledWashes.status': 'completed',
+          'monthlySubscription.scheduledWashes.is_amountPaid': true,
+          'monthlySubscription.scheduledWashes.completedDate': { $gte: prevStartDate, $lt: startDate }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$monthlySubscription.scheduledWashes.amount' }
+        }
+      }
+    ]);
+    
+    const prevPeriodIncome = (prevRevenueFromWashHistory[0]?.totalRevenue || 0) + (prevRevenueFromSubscriptions[0]?.totalRevenue || 0);
 
     const customerChange = prevPeriodCustomers.length > 0 
       ? ((periodCustomers.length - prevPeriodCustomers.length) / prevPeriodCustomers.length) * 100
@@ -231,6 +281,54 @@ router.get('/stats', auth, authorize('superadmin', 'admin'), async (req, res) =>
       ? ((todayLeads - yesterdayLeads) / yesterdayLeads * 100).toFixed(1)
       : 0;
 
+    // Get expenses using aggregation for better performance
+    const expenseResult = await Expense.aggregate([
+      {
+        $match: {
+          date: { $gte: startDate, $lte: endDate }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalExpenses: { $sum: '$amount' }
+        }
+      }
+    ]);
+    
+    const prevExpenseResult = await Expense.aggregate([
+      {
+        $match: {
+          date: { $gte: prevStartDate, $lt: startDate }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalExpenses: { $sum: '$amount' }
+        }
+      }
+    ]);
+    
+    const totalExpenses = expenseResult[0]?.totalExpenses || 0;
+    const prevTotalExpenses = prevExpenseResult[0]?.totalExpenses || 0;
+    
+    console.log('Expense calculation:', {
+      currentExpenses: totalExpenses,
+      prevExpenses: prevTotalExpenses,
+      dateRange: { startDate, endDate }
+    });
+    
+    const expenseChange = prevTotalExpenses > 0 ? ((totalExpenses - prevTotalExpenses) / prevTotalExpenses) * 100 : 0;
+    
+    console.log('Dashboard stats results:', {
+      income,
+      totalExpenses,
+      activeCustomers,
+      todayLeadsCount,
+      conversionRate
+    });
+
     res.json({
       activeCustomers: {
         value: activeCustomers,
@@ -238,9 +336,14 @@ router.get('/stats', auth, authorize('superadmin', 'admin'), async (req, res) =>
         increasing: parseFloat(customerChange) > 0
       },
       income: {
-        value: income,
-        change: parseFloat(incomeChange),
+        value: Math.round(income),
+        change: parseFloat(incomeChange.toFixed(1)),
         increasing: parseFloat(incomeChange) > 0
+      },
+      expenses: {
+        value: Math.round(totalExpenses),
+        change: parseFloat(expenseChange.toFixed(1)),
+        increasing: parseFloat(expenseChange) > 0
       },
       todayLeads: {
         value: todayLeadsCount,
@@ -757,6 +860,8 @@ router.get('/revenue-stats', auth, authorize('superadmin', 'admin'), async (req,
     if (req.query.startDate && req.query.endDate) {
       startDate = new Date(req.query.startDate);
       endDate = new Date(req.query.endDate);
+      startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
     } else {
       const range = req.query.range || '1m';
       const dateRange = getDateRange(range);
@@ -766,73 +871,64 @@ router.get('/revenue-stats', auth, authorize('superadmin', 'admin'), async (req,
     
     const duration = endDate.getTime() - startDate.getTime();
     const prevStartDate = new Date(startDate.getTime() - duration);
-    const prevEndDate = new Date(startDate);
     
-    // Use exact same logic as revenue module - no status filter
-    const leads = await Lead.find({}).select('washHistory monthlySubscription').lean();
+    // Calculate current period revenue using aggregation
+    const currentWashRevenue = await Lead.aggregate([
+      { $unwind: '$washHistory' },
+      {
+        $match: {
+          'washHistory.washStatus': 'completed',
+          'washHistory.is_amountPaid': true,
+          'washHistory.date': { $gte: startDate, $lte: endDate }
+        }
+      },
+      { $group: { _id: null, total: { $sum: '$washHistory.amount' } } }
+    ]);
     
-    let currentRevenue = 0;
-    leads.forEach(lead => {
-      // Wash history revenue (exact same as revenue module)
-      if (Array.isArray(lead.washHistory)) {
-        lead.washHistory.forEach(wash => {
-          if (wash.washStatus === 'completed' && wash.is_amountPaid === true) {
-            const amount = parseFloat(wash.amount) || 0;
-            const washDate = new Date(wash.date);
-            if (washDate >= startDate && washDate <= endDate) {
-              currentRevenue += amount;
-            }
-          }
-        });
-      }
-      
-      // Monthly subscription revenue (exact same as revenue module)
-      if (lead.monthlySubscription && lead.monthlySubscription.scheduledWashes) {
-        lead.monthlySubscription.scheduledWashes.forEach(wash => {
-          if (wash.status === 'completed' && wash.is_amountPaid === true) {
-            const amount = parseFloat(wash.amount) || 0;
-            const completedDate = wash.completedDate ? new Date(wash.completedDate) : null;
-            if (completedDate && completedDate >= startDate && completedDate <= endDate) {
-              currentRevenue += amount;
-            }
-          }
-        });
-      }
-    });
+    const currentSubscriptionRevenue = await Lead.aggregate([
+      { $unwind: '$monthlySubscription.scheduledWashes' },
+      {
+        $match: {
+          'monthlySubscription.scheduledWashes.status': 'completed',
+          'monthlySubscription.scheduledWashes.is_amountPaid': true,
+          'monthlySubscription.scheduledWashes.completedDate': { $gte: startDate, $lte: endDate }
+        }
+      },
+      { $group: { _id: null, total: { $sum: '$monthlySubscription.scheduledWashes.amount' } } }
+    ]);
     
-    // Get previous period for comparison (no status filter)
-    const prevLeads = await Lead.find({}).select('washHistory monthlySubscription').lean();
+    const currentRevenue = (currentWashRevenue[0]?.total || 0) + (currentSubscriptionRevenue[0]?.total || 0);
     
-    let prevRevenue = 0;
-    prevLeads.forEach(lead => {
-      // Previous wash history revenue
-      if (Array.isArray(lead.washHistory)) {
-        lead.washHistory.forEach(wash => {
-          if (wash.washStatus === 'completed' && wash.is_amountPaid === true) {
-            const amount = parseFloat(wash.amount) || 0;
-            const washDate = new Date(wash.date);
-            if (washDate >= prevStartDate && washDate < startDate) {
-              prevRevenue += amount;
-            }
-          }
-        });
-      }
-      
-      // Previous monthly subscription revenue
-      if (lead.monthlySubscription && lead.monthlySubscription.scheduledWashes) {
-        lead.monthlySubscription.scheduledWashes.forEach(wash => {
-          if (wash.status === 'completed' && wash.is_amountPaid === true) {
-            const amount = parseFloat(wash.amount) || 0;
-            const completedDate = wash.completedDate ? new Date(wash.completedDate) : null;
-            if (completedDate && completedDate >= prevStartDate && completedDate < startDate) {
-              prevRevenue += amount;
-            }
-          }
-        });
-      }
-    });
+    // Calculate previous period revenue using aggregation
+    const prevWashRevenue = await Lead.aggregate([
+      { $unwind: '$washHistory' },
+      {
+        $match: {
+          'washHistory.washStatus': 'completed',
+          'washHistory.is_amountPaid': true,
+          'washHistory.date': { $gte: prevStartDate, $lt: startDate }
+        }
+      },
+      { $group: { _id: null, total: { $sum: '$washHistory.amount' } } }
+    ]);
+    
+    const prevSubscriptionRevenue = await Lead.aggregate([
+      { $unwind: '$monthlySubscription.scheduledWashes' },
+      {
+        $match: {
+          'monthlySubscription.scheduledWashes.status': 'completed',
+          'monthlySubscription.scheduledWashes.is_amountPaid': true,
+          'monthlySubscription.scheduledWashes.completedDate': { $gte: prevStartDate, $lt: startDate }
+        }
+      },
+      { $group: { _id: null, total: { $sum: '$monthlySubscription.scheduledWashes.amount' } } }
+    ]);
+    
+    const prevRevenue = (prevWashRevenue[0]?.total || 0) + (prevSubscriptionRevenue[0]?.total || 0);
     
     const revenueChange = prevRevenue > 0 ? ((currentRevenue - prevRevenue) / prevRevenue) * 100 : 0;
+    
+    console.log('Revenue stats:', { currentRevenue, prevRevenue, revenueChange, startDate, endDate });
     
     res.json({
       value: Math.round(currentRevenue),
@@ -893,18 +989,60 @@ router.get('/direct-revenue', auth, authorize('superadmin', 'admin'), async (req
   }
 });
 
-// Get expenses stats (total expenses like revenue report)
+// Get expenses stats with date filtering
 router.get('/expenses-stats', auth, authorize('superadmin', 'admin'), async (req, res) => {
   try {
-    // Get all expenses (no date filter for total)
-    const allExpenses = await Expense.find({});
+    let startDate, endDate;
     
-    const totalExpenses = allExpenses.reduce((sum, expense) => sum + (parseFloat(expense.amount) || 0), 0);
+    if (req.query.startDate && req.query.endDate) {
+      startDate = new Date(req.query.startDate);
+      endDate = new Date(req.query.endDate);
+      startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
+    } else {
+      // Default to all time if no dates provided
+      const allExpenses = await Expense.find({});
+      const totalExpenses = allExpenses.reduce((sum, expense) => sum + (parseFloat(expense.amount) || 0), 0);
+      
+      return res.json({
+        value: Math.round(totalExpenses),
+        change: 0,
+        increasing: false
+      });
+    }
+    
+    // Calculate expenses using aggregation
+    const currentExpenses = await Expense.aggregate([
+      {
+        $match: {
+          date: { $gte: startDate, $lte: endDate }
+        }
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    
+    // Calculate previous period for comparison
+    const duration = endDate.getTime() - startDate.getTime();
+    const prevStartDate = new Date(startDate.getTime() - duration);
+    
+    const prevExpenses = await Expense.aggregate([
+      {
+        $match: {
+          date: { $gte: prevStartDate, $lt: startDate }
+        }
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    
+    const totalExpenses = currentExpenses[0]?.total || 0;
+    const prevTotalExpenses = prevExpenses[0]?.total || 0;
+    
+    const expenseChange = prevTotalExpenses > 0 ? ((totalExpenses - prevTotalExpenses) / prevTotalExpenses) * 100 : 0;
     
     res.json({
       value: Math.round(totalExpenses),
-      change: 0,
-      increasing: false
+      change: parseFloat(expenseChange.toFixed(1)),
+      increasing: expenseChange > 0
     });
   } catch (error) {
     console.error('Error in /expenses-stats:', error);
