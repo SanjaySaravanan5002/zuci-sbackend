@@ -408,16 +408,20 @@ router.get('/:id/bill', auth, authorize('admin', 'superadmin'), async (req, res)
 // Get leads statistics (MOVED BEFORE PARAMETERIZED ROUTES)
 router.get('/stats/overview', async (req, res) => {
   try {
-    const { leadType, leadSource, dateRange, status } = req.query;
+    const { leadType, leadSource, startDate, endDate, status } = req.query;
+    
+    console.log('Dashboard stats query params:', { startDate, endDate, leadType, leadSource });
 
     // Build query based on filters
     const query = {};
     if (leadType) query.leadType = leadType;
     if (leadSource) query.leadSource = leadSource;
-    if (dateRange?.start && dateRange?.end) {
+    
+    // Use startDate and endDate from query params for lead creation filter
+    if (startDate && endDate) {
       query.createdAt = {
-        $gte: new Date(dateRange.start),
-        $lte: new Date(dateRange.end)
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
       };
     }
 
@@ -448,7 +452,21 @@ router.get('/stats/overview', async (req, res) => {
       status: 'Converted'
     });
 
-    // Get total revenue and wash stats for converted leads
+    // Get total revenue and wash stats for converted leads within date range
+    let revenueMatchConditions = [
+      { $eq: ['$$wash.washStatus', 'completed'] }
+    ];
+    
+    // Add date range filter if provided
+    if (startDate && endDate) {
+      revenueMatchConditions.push({
+        $and: [
+          { $gte: ['$$wash.date', new Date(startDate)] },
+          { $lte: ['$$wash.date', new Date(endDate)] }
+        ]
+      });
+    }
+    
     const revenueStats = await Lead.aggregate([
       { $match: { ...query, status: 'Converted' } },
       {
@@ -457,7 +475,7 @@ router.get('/stats/overview', async (req, res) => {
             $filter: {
               input: '$washHistory',
               as: 'wash',
-              cond: { $eq: ['$$wash.washStatus', 'completed'] }
+              cond: { $and: revenueMatchConditions }
             }
           }
         }
@@ -465,14 +483,14 @@ router.get('/stats/overview', async (req, res) => {
       {
         $project: {
           totalAmount: { $sum: '$completedWashes.amount' },
-          hasCompletedWash: { $gt: [{ $size: '$completedWashes' }, 0] }
+          totalWashes: { $size: '$completedWashes' }
         }
       },
       {
         $group: {
           _id: null,
           totalRevenue: { $sum: '$totalAmount' },
-          totalWashes: { $sum: { $cond: ['$hasCompletedWash', 1, 0] } }
+          totalWashes: { $sum: '$totalWashes' }
         }
       }
     ]);
@@ -509,6 +527,30 @@ router.get('/stats/overview', async (req, res) => {
       return acc;
     }, {});
 
+    // Get expenses for the date range
+    const Expense = require('../models/Expense');
+    let expenseQuery = {};
+    if (startDate && endDate) {
+      expenseQuery.date = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+    
+    const expenseStats = await Expense.aggregate([
+      { $match: expenseQuery },
+      {
+        $group: {
+          _id: null,
+          totalExpenses: { $sum: '$amount' }
+        }
+      }
+    ]);
+    
+    console.log('Revenue stats result:', revenueStats);
+    console.log('Expense stats result:', expenseStats);
+    console.log('Date range used:', { startDate, endDate });
+
     res.json({
       totalLeads,
       newToday,
@@ -516,6 +558,7 @@ router.get('/stats/overview', async (req, res) => {
       convertedLeads,
       totalRevenue: revenueStats[0]?.totalRevenue || 0,
       totalWashes: revenueStats[0]?.totalWashes || 0,
+      totalExpenses: expenseStats[0]?.totalExpenses || 0,
       areaDistribution,
       typeDistribution
     });
